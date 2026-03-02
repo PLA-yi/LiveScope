@@ -338,7 +338,8 @@ class DouyinCollector(BaseCollector):
             frame.ParseFromString(raw)
 
             payload = frame.payload
-            if frame.payloadEncoding == "gzip":
+            # 不管 payloadEncoding 字段值，只要以 gzip 魔术字节开头就解压
+            if frame.payloadEncoding == "gzip" or payload[:2] == b"\x1f\x8b":
                 payload = gzip.decompress(payload)
 
             response = pb.Response()
