@@ -4,28 +4,29 @@ from __future__ import annotations
 抖音直播弹幕采集器
 
 协议：WebSocket + Protobuf（自定义二进制协议）
-认证：需要浏览器 Cookie（ttwid / sessionid 等）
+签名：sign.js (MiniRacer) + ac_signature.py，无需 Playwright/Cookie
 
 连接流程：
-  1. HTTP 请求直播间页面，获取 room_id（如果只传了 URL）
-  2. 建立 WebSocket 连接到 webcast5-ws-web-hl.douyin.com
-  3. 接收 PushFrame，解析 payload（gzip 解压 → Protobuf → Response → Messages）
-  4. 针对每个 message.method 分发到对应处理函数
-  5. 定时发送心跳帧保持连接
-  6. 连接断开时由 BaseCollector 自动重连
-
-注意：抖音的签名算法（X-Bogus / _signature）会定期更新，本实现使用
-      Cookie 认证方案规避部分签名校验。如遇 403，请更新 Cookie。
+  1. GET https://live.douyin.com/ → 获取 ttwid cookie（自动）
+  2. GET https://live.douyin.com/{web_rid} → 正则提取 room_id（自动）
+  3. 构建 WSS URL，用 sign.js 计算 signature 参数
+  4. 建立 WebSocket 连接到 webcast100-ws-web-lq.douyin.com
+  5. 接收 PushFrame → gzip 解压 → Protobuf Response → 分发消息
+  6. 定时发送心跳帧 + ACK 回复
+  7. 断线由 BaseCollector 自动重连
 """
 
 import asyncio
 import gzip
+import hashlib
 import json
 import logging
 import random
 import re
+import string
 import time
-from urllib.parse import urlencode
+import urllib.parse
+from pathlib import Path
 
 import httpx
 import websockets
@@ -34,250 +35,272 @@ from websockets.exceptions import ConnectionClosed
 from src.collectors.base import BaseCollector
 from src.database.models import MessageType, Session
 
-# ── Protobuf 延迟导入（运行时生成）──────────────────────────────────────────
+# ── Protobuf 延迟导入 ─────────────────────────────────────────────────────────
 try:
     from src.proto import douyin_pb2 as pb  # type: ignore
     _HAS_PROTO = True
 except ImportError:
     _HAS_PROTO = False
 
+# ── 签名依赖（execjs + Node.js）──────────────────────────────────────────────
+try:
+    import execjs
+    _HAS_EXECJS = True
+except ImportError:
+    _HAS_EXECJS = False
+
 logger = logging.getLogger(__name__)
 
-# ── 抖音 WebSocket & API 常量 ────────────────────────────────────────────────
-_WS_HOST = "wss://webcast5-ws-web-hl.douyin.com"
-_WS_PATH = "/webcast/im/push/v2/"
-_ROOM_URL_RE   = re.compile(r'"roomId"\s*:\s*"(\d+)"')
-_ROOM_INIT_RE  = re.compile(r'roomId=(\d+)')
-_ROOM_DATA_RE  = re.compile(r'"room_id"\s*:\s*"(\d+)"')
-_ROOM_LIVE_RE  = re.compile(r'/live/(\d+)')
+# ── 签名文件路径 ──────────────────────────────────────────────────────────────
+_SIGN_DIR  = Path(__file__).parent.parent / "douyin_sign"
+_SIGN_JS   = _SIGN_DIR / "sign.js"
+_BOGUS_JS  = _SIGN_DIR / "a_bogus.js"
 
-_BASE_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0.0.0 Safari/537.36"
-    ),
-    "Referer": "https://live.douyin.com/",
-    "Origin": "https://live.douyin.com",
-}
+# ── 常量 ──────────────────────────────────────────────────────────────────────
+_LIVE_HOST   = "https://live.douyin.com"
+_WS_URL_BASE = (
+    "wss://webcast100-ws-web-lq.douyin.com/webcast/im/push/v2/"
+    "?app_name=douyin_web"
+    "&version_code=180800"
+    "&webcast_sdk_version=1.0.14-beta.0"
+    "&update_version_code=1.0.14-beta.0"
+    "&compress=gzip"
+    "&device_platform=web"
+    "&cookie_enabled=true"
+    "&screen_width=1536&screen_height=864"
+    "&browser_language=zh-CN"
+    "&browser_platform=Win32"
+    "&browser_name=Mozilla"
+    "&browser_version=5.0%20(Windows%20NT%2010.0;%20Win64;%20x64)%20"
+    "AppleWebKit/537.36%20(KHTML,%20like%20Gecko)%20Chrome/126.0.0.0%20Safari/537.36"
+    "&browser_online=true"
+    "&tz_name=Asia/Shanghai"
+    "&cursor=d-1_u-1_fh-7392091211001140287_t-1721106114633_r-1"
+    "&did_rule=3"
+    "&aid=6383"
+    "&live_id=1"
+    "&endpoint=live_pc"
+    "&support_wrds=1"
+    "&im_path=/webcast/im/fetch/"
+    "&identity=audience"
+    "&need_persist_msg_count=15"
+    "&heartbeatDuration=0"
+)
 
-_HEARTBEAT_INTERVAL = 10  # 秒
+_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/126.0.0.0 Safari/537.36"
+)
+
+_HEARTBEAT_INTERVAL = 5   # 秒，与原项目保持一致
+
+
+def _generate_ms_token(length: int = 182) -> str:
+    """生成随机 msToken（182 位字母数字）"""
+    base = string.ascii_letters + string.digits + "-_"
+    return "".join(random.choice(base) for _ in range(length))
+
+
+def _generate_signature(wss_url: str) -> str:
+    """
+    用 sign.js 计算 WebSocket URL 的 signature 参数。
+    逻辑：从 URL 提取特定字段 → MD5 → execjs(Node.js) 调用 get_sign(md5)
+    """
+    if not _HAS_EXECJS:
+        logger.warning("[Douyin] PyExecJS 未安装，签名跳过，连接可能失败")
+        return ""
+    if not _SIGN_JS.exists():
+        logger.warning("[Douyin] sign.js 不存在，签名跳过")
+        return ""
+
+    param_keys = (
+        "live_id,aid,version_code,webcast_sdk_version,"
+        "room_id,sub_room_id,sub_channel_id,did_rule,"
+        "user_unique_id,device_platform,device_type,ac,"
+        "identity"
+    ).split(",")
+
+    parsed   = urllib.parse.urlparse(wss_url)
+    qs_map   = dict(urllib.parse.parse_qsl(parsed.query))
+    tpl_list = [f"{k}={qs_map.get(k, '')}" for k in param_keys]
+    param    = ",".join(tpl_list)
+
+    md5 = hashlib.md5(param.encode()).hexdigest()
+
+    script = _SIGN_JS.read_text(encoding="utf-8")
+    ctx    = execjs.compile(script)
+    return ctx.call("get_sign", md5)
 
 
 class DouyinCollector(BaseCollector):
     """
-    抖音直播弹幕采集器。
+    抖音直播弹幕采集器（签名直连版）。
 
     用法::
 
         collector = DouyinCollector(
             session=session,
             queue=queue,
-            room_id="7123456789",      # 直播间 room_id
-            cookie="ttwid=xxx; ..."    # 浏览器 Cookie（可选但推荐）
+            room_id="7123456789",   # 直播间 web_rid（URL 中的数字）
+            cookie="",              # 可空，ttwid 自动获取
         )
         await collector.start()
-
-    room_id 获取方式：
-      - 打开直播间页面，在 URL 或页面源码中搜索 "roomId"
-      - 也可传入直播间完整 URL，本类会自动提取
     """
 
     def __init__(
         self,
-        session: Session,
-        queue: asyncio.Queue,
-        room_id: str,
-        cookie: str = "",
-        web_rid: str = "",
-        ws_url: str = "",
+        session:  Session,
+        queue:    asyncio.Queue,
+        room_id:  str,
+        cookie:   str = "",
+        web_rid:  str = "",
+        ws_url:   str = "",
     ) -> None:
         super().__init__(session, queue)
-        self._web_rid   = web_rid or room_id
-        self._room_id   = room_id
-        self._cookie    = cookie
-        self._fixed_url = ws_url   # 若由前端直接传入完整 WS URL，则跳过自动构建
+        self._web_rid    = web_rid or room_id
+        self._room_id    = room_id
+        self._cookie     = cookie
+        self._fixed_url  = ws_url
+        self._ttwid: str = ""
         self._ws: websockets.WebSocketClientProtocol | None = None
 
-    # ── BaseCollector 接口 ────────────────────────────────────────────────────
+    # ── 获取 ttwid（访问直播间首页，从 Cookie 提取）────────────────────────────
 
-    async def _resolve_room_id(self) -> None:
-        """通过抖音 HTTP API 将 web_rid 解析为内部 room_id。"""
-        headers = dict(_BASE_HEADERS)
-        if self._cookie:
-            headers["Cookie"] = self._cookie
-        params = {
-            "aid": "6383",
-            "app_name": "douyin_web",
-            "live_id": "1",
-            "device_platform": "web",
-            "language": "zh-CN",
-            "web_rid": self._web_rid,
+    async def _fetch_ttwid(self) -> str:
+        """访问直播间首页，自动提取 ttwid cookie。"""
+        headers = {
+            "User-Agent": _USER_AGENT,
+            "Referer": "https://live.douyin.com/",
         }
         try:
             async with httpx.AsyncClient(follow_redirects=True, timeout=10) as client:
-                resp = await client.get(
-                    "https://live.douyin.com/webcast/room/web/enter/",
-                    params=params,
-                    headers=headers,
-                )
-                text = resp.text.strip()
-                if not text:
-                    raise RuntimeError("直播间不在线或需要 Cookie 认证，请确认直播间正在直播")
-                data = resp.json()
-            # 检查直播状态
-            status_code = data.get("status_code", -1)
-            if status_code != 0:
-                msg = data.get("message", "未知错误")
-                raise RuntimeError(f"直播间 API 返回错误 {status_code}: {msg}")
-            room_id = str(data["data"]["data"][0]["id_str"])
-            if room_id and room_id != "0":
-                logger.info("[Douyin] Resolved room_id: %s → %s", self._web_rid, room_id)
-                self._room_id = room_id
-        except RuntimeError:
-            raise   # 让 BaseCollector 的重试逻辑接管，并打印友好信息
+                resp = await client.get(_LIVE_HOST + "/", headers=headers)
+                ttwid = resp.cookies.get("ttwid", "")
+                if ttwid:
+                    logger.info("[Douyin] ttwid 获取成功")
+                    return ttwid
         except Exception as exc:
-            logger.warning("[Douyin] Could not resolve room_id via API (%s), using web_rid as fallback", exc)
+            logger.warning("[Douyin] 获取 ttwid 失败: %s", exc)
+        return ""
 
-    @staticmethod
-    async def _get_ws_url_via_playwright(web_rid: str, cookie: str = "") -> str | None:
-        """
-        用独立子进程运行 Playwright，访问直播间并捕获真实 WebSocket URL（含 msToken）。
-        子进程与 uvicorn 的 asyncio 完全隔离，避免事件循环冲突。
-        """
-        import sys
-        import json as _json
+    # ── 获取真实 room_id（从直播间页面 HTML 提取）────────────────────────────
 
-        # 注：cookie 通过 stdin 传入，避免命令行参数长度限制
-        script = r"""
-import asyncio, sys, json
+    async def _resolve_room_id(self) -> None:
+        """通过访问直播间页面，从 HTML 中提取真实 room_id。"""
+        url = f"{_LIVE_HOST}/{self._web_rid}"
+        ms_token = _generate_ms_token()
+        ttwid = self._ttwid or await self._fetch_ttwid()
+        if ttwid:
+            self._ttwid = ttwid
 
-async def main():
-    data   = json.loads(sys.stdin.read())
-    web_rid = data["web_rid"]
-    cookie  = data["cookie"]
-
-    captured = []
-    from playwright.async_api import async_playwright
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-blink-features=AutomationControlled",
-            ],
-        )
+        headers = {
+            "User-Agent": _USER_AGENT,
+            "Cookie": f"ttwid={self._ttwid}&msToken={ms_token}; __ac_nonce=0123407cc00a9e438deb4",
+            "Referer": f"{_LIVE_HOST}/",
+        }
         try:
-            context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                locale="zh-CN",
-                viewport={"width": 1280, "height": 800},
-            )
-            if cookie:
-                pw_cookies = []
-                for item in cookie.split(";"):
-                    item = item.strip()
-                    if "=" in item:
-                        name, _, value = item.partition("=")
-                        pw_cookies.append({"name": name.strip(), "value": value.strip(),
-                                           "domain": ".douyin.com", "path": "/", "secure": True})
-                if pw_cookies:
-                    await context.add_cookies(pw_cookies)
-            page = await context.new_page()
-
-            # 必须在 goto 之前注册，否则可能错过早期 WebSocket
-            def on_ws(ws):
-                url = ws.url
-                if ("push/v2" in url or ("webcast" in url and "ws" in url)) and not captured:
-                    captured.append(url)
-
-            page.on("websocket", on_ws)
-
-            try:
-                await page.goto(
-                    f"https://live.douyin.com/{web_rid}",
-                    wait_until="load",
-                    timeout=25000,
-                )
-            except Exception:
-                pass  # timeout/nav errors are non-fatal
-
-            # 等待 JS 初始化并建立 WebSocket（最多 15 秒）
-            for _ in range(150):
-                if captured:
-                    break
-                await asyncio.sleep(0.1)
-
-            # 若仍未捕获，再等待 5 秒（处理慢速网络）
-            if not captured:
-                await asyncio.sleep(5)
-
-        finally:
-            await browser.close()
-
-    print(captured[0] if captured else "")
-
-asyncio.run(main())
-"""
-        logger.warning("[Douyin] Playwright 正在打开直播间 %s …", web_rid)
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable, "-c", script,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdin_data = _json.dumps({"web_rid": web_rid, "cookie": cookie}).encode()
-            stdout, stderr = await asyncio.wait_for(proc.communicate(stdin_data), timeout=55)
-            url = stdout.decode().strip()
-            if url:
-                logger.warning("[Douyin] Playwright 捕获到 WS URL ✓")
-                return url
-            err_msg = stderr.decode().strip()[-300:] if stderr else ""
-            logger.warning("[Douyin] Playwright 未能捕获到 WS URL（直播间可能未在线或未登录）%s",
-                           f"\n  stderr: {err_msg}" if err_msg else "")
-        except asyncio.TimeoutError:
-            logger.warning("[Douyin] Playwright 超时")
-            if proc:
-                proc.kill()
+            async with httpx.AsyncClient(follow_redirects=True, timeout=15) as client:
+                resp = await client.get(url, headers=headers)
+                html = resp.text
         except Exception as exc:
-            logger.warning("[Douyin] Playwright 出错: %s", exc)
-        return None
+            logger.warning("[Douyin] 页面请求失败: %s", exc)
+            return
+
+        match = re.search(r'roomId\\":\\"(\d+)\\"', html)
+        if match:
+            self._room_id = match.group(1)
+            logger.info("[Douyin] room_id 解析成功: %s → %s", self._web_rid, self._room_id)
+        else:
+            # 降级：多种 regex 兜底
+            for pat in (
+                re.compile(r'"roomId"\s*:\s*"(\d+)"'),
+                re.compile(r'"room_id"\s*:\s*"(\d+)"'),
+                re.compile(r'roomId=(\d+)'),
+            ):
+                m = pat.search(html)
+                if m:
+                    self._room_id = m.group(1)
+                    logger.info("[Douyin] room_id 解析（fallback）: %s", self._room_id)
+                    return
+            logger.warning("[Douyin] 未能从页面提取 room_id，将使用 web_rid=%s", self._web_rid)
+
+    # ── BaseCollector 接口 ────────────────────────────────────────────────────
 
     async def _connect(self) -> None:
+        # 1. 自动获取 ttwid
+        if not self._ttwid:
+            self._ttwid = await self._fetch_ttwid()
+
+        # 2. 解析真实 room_id
+        await self._resolve_room_id()
+
+        # 3. 构建 WSS URL
         if self._fixed_url:
             ws_url = self._fixed_url
         else:
-            # 优先用 Playwright 全自动获取真实 WS URL（含 msToken）
-            ws_url = await self._get_ws_url_via_playwright(self._web_rid, self._cookie)
-            if not ws_url:
-                # 降级：手动解析 room_id + 构建 URL
-                logger.warning("[Douyin] 降级为手动 WS URL 构建")
-                await self._resolve_room_id()
-                ws_url = self._build_ws_url()
-        headers = dict(_BASE_HEADERS)
-        if self._cookie:
-            headers["Cookie"] = self._cookie
+            ws_url = self._build_ws_url()
 
-        logger.info("[Douyin] Connecting to room %s (web_rid=%s) …", self._room_id, self._web_rid)
+        # 4. Cookie：优先用用户提供的，否则用自动获取的 ttwid
+        cookie_str = self._cookie or f"ttwid={self._ttwid}"
+
+        headers = {
+            "User-Agent": _USER_AGENT,
+            "Cookie": cookie_str,
+            "Referer": f"{_LIVE_HOST}/{self._web_rid}",
+        }
+
+        logger.info("[Douyin] 连接直播间 room_id=%s web_rid=%s", self._room_id, self._web_rid)
 
         async with websockets.connect(
             ws_url,
             additional_headers=headers,
-            ping_interval=None,  # 我们自己管理心跳
-            max_size=10 * 1024 * 1024,  # 10MB，应对大体积帧
-            open_timeout=15,
+            ping_interval=None,  # 由 _heartbeat_loop 管理心跳
+            max_size=10 * 1024 * 1024,
+            open_timeout=20,
         ) as ws:
             self._ws = ws
-            logger.info("[Douyin] WebSocket connected.")
+            logger.info("[Douyin] WebSocket 已连接")
 
-            # 并发：消息接收 + 定时心跳
             await asyncio.gather(
                 self._recv_loop(ws),
                 self._heartbeat_loop(ws),
             )
+
+    # ── 构建 WSS URL ───────────────────────────────────────────────────────────
+
+    def _build_ws_url(self) -> str:
+        """构建带 room_id、user_unique_id、internal_ext、signature 的完整 WSS URL。"""
+        user_unique_id = str(random.randint(10**18, 10**19 - 1))
+        now_ms = int(time.time() * 1000)
+
+        wss = (
+            _WS_URL_BASE
+            + f"&internal_ext=internal_src:dim"
+            + f"|wss_push_room_id:{self._room_id}"
+            + f"|wss_push_did:{user_unique_id}"
+            + f"|first_req_ms:{now_ms}"
+            + f"|fetch_time:{now_ms}"
+            + f"|seq:1|wss_info:0-{now_ms}-0-0"
+            + f"|wrds_v:7392094459690748497"
+            + f"&host=https://live.douyin.com"
+            + f"&user_unique_id={user_unique_id}"
+            + f"&room_id={self._room_id}"
+            + f"&web_rid={self._web_rid}"
+        )
+
+        # 计算签名
+        try:
+            sig = _generate_signature(wss)
+            if sig:
+                wss += f"&signature={sig}"
+                logger.info("[Douyin] 签名计算成功")
+            else:
+                logger.warning("[Douyin] 签名为空，将以无签名方式尝试连接")
+        except Exception as exc:
+            logger.warning("[Douyin] 签名计算失败: %s", exc)
+
+        return wss
 
     # ── WebSocket 循环 ────────────────────────────────────────────────────────
 
@@ -289,7 +312,7 @@ asyncio.run(main())
                 await self._handle_frame(ws, raw)
 
     async def _heartbeat_loop(self, ws: websockets.WebSocketClientProtocol) -> None:
-        """每 10 秒发送一次心跳，保持 WebSocket 连接。"""
+        """每 5 秒发送一次 protobuf 心跳（payload_type='hb'）。"""
         while self._running:
             await asyncio.sleep(_HEARTBEAT_INTERVAL)
             try:
@@ -298,25 +321,22 @@ asyncio.run(main())
                     frame.payloadType = "hb"
                     await ws.send(frame.SerializeToString())
                 else:
-                    # 最简心跳：发送空 ping
                     await ws.ping()
             except ConnectionClosed:
                 break
             except Exception as exc:
-                logger.warning("[Douyin] Heartbeat error: %s", exc)
+                logger.warning("[Douyin] 心跳错误: %s", exc)
 
     # ── 帧解析 ────────────────────────────────────────────────────────────────
 
     async def _handle_frame(self, ws: websockets.WebSocketClientProtocol, raw: bytes) -> None:
         if not _HAS_PROTO:
-            logger.debug("[Douyin] protobuf not compiled, raw frame len=%d", len(raw))
             return
 
         try:
             frame = pb.PushFrame()
             frame.ParseFromString(raw)
 
-            # 解压 payload（抖音使用 gzip）
             payload = frame.payload
             if frame.payloadEncoding == "gzip":
                 payload = gzip.decompress(payload)
@@ -324,25 +344,21 @@ asyncio.run(main())
             response = pb.Response()
             response.ParseFromString(payload)
 
-            # 如需 ACK，回复服务端
+            # ACK 回复
             if response.needAck:
-                ack_frame = pb.PushFrame()
-                ack_frame.logId = frame.logId
-                ack_frame.payloadType = "ack"
-                ack_frame.payload = response.internalExt.encode()
-                await ws.send(ack_frame.SerializeToString())
+                ack = pb.PushFrame()
+                ack.logId       = frame.logId
+                ack.payloadType = "ack"
+                ack.payload     = response.internalExt.encode("utf-8")
+                await ws.send(ack.SerializeToString())
 
-            for msg in response.messages:
+            for msg in response.messagesList:
                 self._dispatch(msg)
 
         except Exception as exc:
-            logger.debug("[Douyin] Frame parse error: %s", exc)
+            logger.debug("[Douyin] 帧解析错误: %s", exc)
 
     def _dispatch(self, msg) -> None:
-        """根据 msg.method 分发到对应处理函数。"""
-        method = msg.method
-        payload = msg.payload
-
         handlers = {
             "WebcastChatMessage":   self._on_chat,
             "WebcastGiftMessage":   self._on_gift,
@@ -350,151 +366,97 @@ asyncio.run(main())
             "WebcastLikeMessage":   self._on_like,
             "WebcastSocialMessage": self._on_social,
         }
-
-        handler = handlers.get(method)
+        handler = handlers.get(msg.method)
         if handler:
             try:
-                handler(payload, msg.msgId)
+                handler(msg.payload, msg.msgId)
             except Exception as exc:
-                logger.debug("[Douyin] Handler %s error: %s", method, exc)
+                logger.debug("[Douyin] Handler %s error: %s", msg.method, exc)
 
-    # ── 消息处理函数 ──────────────────────────────────────────────────────────
+    # ── 消息处理 ──────────────────────────────────────────────────────────────
 
     def _on_chat(self, payload: bytes, msg_id: int) -> None:
-        chat = pb.ChatMessage()
-        chat.ParseFromString(payload)
+        msg = pb.ChatMessage()
+        msg.ParseFromString(payload)
         self._emit(
             msg_type=MessageType.CHAT,
-            user_id=str(chat.user.id),
-            username=chat.user.nickName,
-            content=chat.content,
+            user_id=str(msg.user.id),
+            username=msg.user.nickName,
+            content=msg.content,
             msg_id=str(msg_id),
         )
-        logger.debug("[Douyin] 💬 %s: %s", chat.user.nickName, chat.content)
+        logger.debug("[Douyin] 💬 %s: %s", msg.user.nickName, msg.content)
 
     def _on_gift(self, payload: bytes, msg_id: int) -> None:
-        gift = pb.GiftMessage()
-        gift.ParseFromString(payload)
+        msg = pb.GiftMessage()
+        msg.ParseFromString(payload)
         extra = json.dumps(
-            {"gift_id": gift.giftId, "repeat_count": gift.repeatCount},
+            {"gift_id": msg.giftId, "repeat_count": msg.repeatCount},
             ensure_ascii=False,
         )
         self._emit(
             msg_type=MessageType.GIFT,
-            user_id=str(gift.user.id),
-            username=gift.user.nickName,
-            content=gift.giftName,
+            user_id=str(msg.user.id),
+            username=msg.user.nickName,
+            content=msg.gift.name,
             msg_id=str(msg_id),
             extra=extra,
         )
-        logger.debug("[Douyin] 🎁 %s sent %s x%d", gift.user.nickName, gift.giftName, gift.repeatCount)
+        logger.debug("[Douyin] 🎁 %s sent %s x%d", msg.user.nickName, msg.gift.name, msg.repeatCount)
 
     def _on_member(self, payload: bytes, msg_id: int) -> None:
-        member = pb.MemberMessage()
-        member.ParseFromString(payload)
+        msg = pb.MemberMessage()
+        msg.ParseFromString(payload)
         self._emit(
             msg_type=MessageType.ENTER,
-            user_id=str(member.user.id),
-            username=member.user.nickName,
+            user_id=str(msg.user.id),
+            username=msg.user.nickName,
             msg_id=str(msg_id),
         )
 
     def _on_like(self, payload: bytes, msg_id: int) -> None:
-        like = pb.LikeMessage()
-        like.ParseFromString(payload)
+        msg = pb.LikeMessage()
+        msg.ParseFromString(payload)
         self._emit(
             msg_type=MessageType.LIKE,
-            user_id=str(like.user.id),
-            username=like.user.nickName,
+            user_id=str(msg.user.id),
+            username=msg.user.nickName,
             msg_id=str(msg_id),
         )
 
     def _on_social(self, payload: bytes, msg_id: int) -> None:
-        social = pb.SocialMessage()
-        social.ParseFromString(payload)
+        msg = pb.SocialMessage()
+        msg.ParseFromString(payload)
         self._emit(
             msg_type=MessageType.SUBSCRIBE,
-            user_id=str(social.user.id),
-            username=social.user.nickName,
+            user_id=str(msg.user.id),
+            username=msg.user.nickName,
             msg_id=str(msg_id),
         )
 
-    # ── URL 构造 ──────────────────────────────────────────────────────────────
-
-    def _build_ws_url(self) -> str:
-        device_id = str(random.randint(10**18, 10**19 - 1))
-        params = {
-            "app_name":              "douyin_web",
-            "version_code":          "180800",
-            "webcast_sdk_version":   "1.0.14",
-            "update_version_code":   "1.0.14",
-            "compress":              "gzip",
-            "device_platform":       "web",
-            "cookie_enabled":        "true",
-            "http_schema":           "https",
-            "aid":                   "6383",
-            "device_id":             device_id,
-            "live_id":               "1",
-            "did_rule":              "3",
-            "web_rid":               self._web_rid,
-            "room_id_str":           self._room_id,
-            "room_id":               self._room_id,
-            "identity":              "audience",
-            "need_persist_msg_count": "15",
-            "support_wrds":          "1",
-            "im_path":               "/webcast/im/fetch/",
-            "browser_language":      "zh-CN",
-            "browser_platform":      "MacIntel",
-            "browser_name":          "Chrome",
-            "browser_version":       "122.0.0.0",
-            "ts":                    str(int(time.time())),
-        }
-        return f"{_WS_HOST}{_WS_PATH}?{urlencode(params)}"
-
-    # ── 静态工具方法 ──────────────────────────────────────────────────────────
+    # ── 静态工具：从 URL 提取 web_rid ────────────────────────────────────────
 
     @staticmethod
     async def fetch_room_id(live_url: str, cookie: str = "") -> str | None:
-        """
-        从抖音直播间 URL 提取 room_id，支持短链接、分享链接和完整直播间 URL。
+        """从抖音直播间 URL 提取 web_rid（URL 路径中的数字）。"""
+        path_part = live_url.rstrip("/").split("/")[-1].split("?")[0]
+        if path_part.isdigit():
+            return path_part
 
-        Args:
-            live_url: 如 https://live.douyin.com/123456789 或 https://v.douyin.com/xxx
-            cookie:   可选浏览器 Cookie
-
-        Returns:
-            room_id 字符串，失败返回 None
-        """
-        headers = dict(_BASE_HEADERS)
+        headers = {
+            "User-Agent": _USER_AGENT,
+            "Referer": "https://live.douyin.com/",
+        }
         if cookie:
             headers["Cookie"] = cookie
 
-        # ── 先尝试从原始 URL 路径直接提取（快速路径）──────────────────────────
-        raw_path = live_url.rstrip("/").split("/")[-1].split("?")[0]
-        if raw_path.isdigit():
-            return raw_path
-
-        # ── 发起请求，跟随重定向获取最终页面 ─────────────────────────────────
-        html = ""
-        final_url = live_url
         try:
             async with httpx.AsyncClient(follow_redirects=True, timeout=15) as client:
                 resp = await client.get(live_url, headers=headers)
-                html = resp.text
-                final_url = str(resp.url)
+                final_path = str(resp.url).rstrip("/").split("/")[-1].split("?")[0]
+                if final_path.isdigit():
+                    return final_path
         except Exception as exc:
-            logger.warning("[Douyin] HTTP error fetching URL: %s", exc)
+            logger.warning("[Douyin] fetch_room_id 请求失败: %s", exc)
 
-        # ── 从最终 URL 路径提取（跟随重定向后）───────────────────────────────
-        final_path = final_url.rstrip("/").split("/")[-1].split("?")[0]
-        if final_path.isdigit():
-            return final_path
-
-        # ── 从 HTML 中提取（多种模式）────────────────────────────────────────
-        for pattern in (_ROOM_URL_RE, _ROOM_DATA_RE, _ROOM_INIT_RE, _ROOM_LIVE_RE):
-            m = pattern.search(html)
-            if m:
-                return m.group(1)
-
-        logger.error("[Douyin] Could not extract room_id from URL: %s (final: %s)", live_url, final_url)
         return None

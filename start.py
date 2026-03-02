@@ -160,20 +160,31 @@ def install_dependencies() -> None:
         say("✓", green("所有依赖已是最新"))
 
 
-def install_playwright_browsers() -> None:
-    """确保 Playwright Chromium 浏览器已安装。"""
-    # 检查 chromium 是否已安装
-    result = run(
-        [str(VENV_PYTHON), "-m", "playwright", "install", "--dry-run", "chromium"],
-        check=False, capture=True,
-    )
-    # dry-run 输出含 "chromium" 说明需要安装
-    if result.returncode != 0 or "chromium" in (result.stdout + result.stderr).lower():
-        say("🌐", "安装 Playwright Chromium（首次约 150MB，后续跳过）…")
-        run([str(VENV_PYTHON), "-m", "playwright", "install", "chromium"], check=False)
-        say("✓", green("Playwright Chromium 安装完成"))
-    else:
-        say("✓", green("Playwright Chromium 已就绪"))
+def check_sign_files() -> None:
+    """确保抖音签名 JS 文件存在（sign.js / a_bogus.js）。"""
+    sign_dir  = ROOT / "src" / "douyin_sign"
+    sign_js   = sign_dir / "sign.js"
+    bogus_js  = sign_dir / "a_bogus.js"
+
+    if sign_js.exists() and bogus_js.exists():
+        say("✓", green("抖音签名文件已就绪"))
+        return
+
+    say("⬇ ", "下载抖音签名文件（sign.js / a_bogus.js）…")
+    sign_dir.mkdir(parents=True, exist_ok=True)
+    init_f = sign_dir / "__init__.py"
+    if not init_f.exists():
+        init_f.touch()
+
+    base = "https://raw.githubusercontent.com/saermart/DouyinLiveWebFetcher/main"
+    import urllib.request
+    for fname, url in [("sign.js", f"{base}/sign.js"), ("a_bogus.js", f"{base}/a_bogus.js"),
+                       ("ac_signature.py", f"{base}/ac_signature.py")]:
+        try:
+            urllib.request.urlretrieve(url, sign_dir / fname)
+            say("✓", green(f"  {fname} 下载完成"))
+        except Exception as e:
+            say("⚠ ", yellow(f"  {fname} 下载失败: {e}"))
 
 
 def compile_proto() -> None:
@@ -232,6 +243,7 @@ def preflight_check() -> None:
         "虚拟环境":          VENV_DIR.exists(),
         "依赖已安装":        VENV_PIP.exists(),
         "Protobuf 已编译":  PROTO_PY.exists(),
+        "抖音签名文件":      (ROOT / "src" / "douyin_sign" / "sign.js").exists(),
         ".env 已配置":       ENV_FILE.exists(),
     }
     all_ok = all(checks.values())
@@ -258,7 +270,7 @@ def main() -> None:
     check_python()
     setup_venv()
     install_dependencies()
-    install_playwright_browsers()
+    check_sign_files()
     compile_proto()
     setup_env()
     preflight_check()

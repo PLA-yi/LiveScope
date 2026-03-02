@@ -10,8 +10,8 @@ sqlalchemy[asyncio]>=2.0.0
 # Protobuf（抖音消息解析）
 protobuf>=4.25.0
 
-# 无头浏览器（抖音自动采集）
-playwright>=1.40.0
+# 抖音签名（DouyinLiveWebFetcher，需要系统安装 Node.js）
+PyExecJS>=1.5.1
 
 # Web 看板
 fastapi>=0.111.0
