@@ -12,7 +12,7 @@ from typing import Optional
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from sqlalchemy import func, select, text
 
 from src.config import config
@@ -34,6 +34,16 @@ _active: dict[str, dict] = {}
 @app.on_event("startup")
 async def startup() -> None:
     await init_db()
+    # 服务重启后，DB 里残留的 live 会话实际上已终止，统一标记为 ended
+    from sqlalchemy import update
+    from datetime import datetime
+    async with AsyncSessionLocal() as db:
+        await db.execute(
+            update(Session)
+            .where(Session.status == SessionStatus.LIVE)
+            .values(status=SessionStatus.ENDED, ended_at=datetime.utcnow())
+        )
+        await db.commit()
 
 
 # ── 静态首页 ──────────────────────────────────────────────────────────────────
@@ -239,6 +249,23 @@ async def stop_collect(session_id: str = Query(...)) -> JSONResponse:
     return JSONResponse({"session_id": session_id, "status": "stopped"})
 
 
+@app.delete("/api/sessions/{session_id}")
+async def delete_session(session_id: str) -> JSONResponse:
+    if session_id in _active:
+        return JSONResponse({"error": "采集中的会话不能删除，请先停止采集"}, status_code=400)
+    from sqlalchemy import text
+    try:
+        async with engine.begin() as conn:
+            r1 = await conn.execute(text("DELETE FROM messages WHERE session_id = :sid"), {"sid": session_id})
+            r2 = await conn.execute(text("DELETE FROM sessions WHERE id = :sid"), {"sid": session_id})
+            logger.info("[delete] session=%s  messages_deleted=%d  sessions_deleted=%d",
+                        session_id, r1.rowcount, r2.rowcount)
+    except Exception as exc:
+        logger.error("[delete] failed: %s", exc)
+        return JSONResponse({"error": str(exc)}, status_code=500)
+    return JSONResponse({"status": "deleted"})
+
+
 # ── 设置管理 ──────────────────────────────────────────────────────────────────
 
 SETTINGS_FILE = Path(__file__).parent.parent / "settings.json"
@@ -251,7 +278,9 @@ def _load_settings() -> dict:
             return json.loads(SETTINGS_FILE.read_text())
         except Exception:
             pass
-    return {"openrouter_api_key": "", "openrouter_model": "openai/gpt-4o-mini", "eulerstream_api_key": "", "douyin_cookie": ""}
+    return {"openrouter_api_key": "", "openrouter_model": "openai/gpt-4o-mini",
+            "eulerstream_api_key": "", "douyin_cookie": "",
+            "analyze_provider": "deepseek", "analyze_api_key": "", "analyze_model": "deepseek-chat"}
 
 
 def _save_settings(data: dict) -> None:
@@ -287,6 +316,7 @@ async def get_settings() -> JSONResponse:
     or_key        = s.get("openrouter_api_key", "")
     euler_key     = s.get("eulerstream_api_key", "")
     douyin_cookie = s.get("douyin_cookie", "")
+    analyze_key   = s.get("analyze_api_key", "")
     return JSONResponse({
         "openrouter_api_key_masked":   _mask_key(or_key),
         "openrouter_api_key_set":      bool(or_key),
@@ -295,6 +325,11 @@ async def get_settings() -> JSONResponse:
         "eulerstream_api_key_set":     bool(euler_key),
         "douyin_cookie_masked":        _mask_key(douyin_cookie),
         "douyin_cookie_set":           bool(douyin_cookie),
+        "analyze_provider":            s.get("analyze_provider", "deepseek"),
+        "analyze_api_key":             analyze_key,
+        "analyze_api_key_masked":      _mask_key(analyze_key),
+        "analyze_api_key_set":         bool(analyze_key),
+        "analyze_model":               s.get("analyze_model", "deepseek-chat"),
     })
 
 
@@ -304,9 +339,11 @@ async def save_settings(
     openrouter_model:    str = Query(default="openai/gpt-4o-mini"),
     eulerstream_api_key: str = Query(default=""),
     douyin_cookie:       str = Query(default=""),
+    analyze_provider:    str = Query(default=""),
+    analyze_api_key:     str = Query(default=""),
+    analyze_model:       str = Query(default=""),
 ) -> JSONResponse:
     current = _load_settings()
-    # 空值表示"不修改"（前端隐码展示时用户不填）
     if openrouter_api_key:
         current["openrouter_api_key"] = openrouter_api_key.strip()
     if openrouter_model:
@@ -315,8 +352,201 @@ async def save_settings(
         current["eulerstream_api_key"] = eulerstream_api_key.strip()
     if douyin_cookie:
         current["douyin_cookie"] = _normalize_cookie(douyin_cookie)
+    if analyze_provider:
+        current["analyze_provider"] = analyze_provider.strip()
+    if analyze_api_key:
+        current["analyze_api_key"] = analyze_api_key.strip()
+    if analyze_model:
+        current["analyze_model"] = analyze_model.strip()
     _save_settings(current)
     return JSONResponse({"status": "saved"})
+
+
+# ── AI 分析 ───────────────────────────────────────────────────────────────────
+
+# 所有支持 OpenAI 兼容接口的提供商
+_PROVIDERS: dict[str, dict] = {
+    "deepseek":   {"name": "DeepSeek",       "base_url": "https://api.deepseek.com/v1",
+                   "models": ["deepseek-chat", "deepseek-reasoner"]},
+    "qwen":       {"name": "通义千问",        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                   "models": ["qwen-max", "qwen-plus", "qwen-turbo", "qwen-long"]},
+    "moonshot":   {"name": "月之暗面 Kimi",   "base_url": "https://api.moonshot.cn/v1",
+                   "models": ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"]},
+    "zhipu":      {"name": "智谱 GLM",        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+                   "models": ["glm-4-plus", "glm-4-air", "glm-4-flash"]},
+    "minimax":    {"name": "MiniMax",         "base_url": "https://api.minimax.chat/v1",
+                   "models": ["MiniMax-Text-01", "abab6.5s-chat", "abab6.5-chat"]},
+    "openrouter": {"name": "OpenRouter",      "base_url": "https://openrouter.ai/api/v1",
+                   "models": ["openai/gpt-4o-mini", "openai/gpt-4o",
+                               "anthropic/claude-sonnet-4-6", "google/gemini-flash-1.5",
+                               "deepseek/deepseek-chat"],
+                   "extra_headers": {"HTTP-Referer": "https://github.com/livescope", "X-Title": "LiveScope"}},
+    "openai":     {"name": "OpenAI",          "base_url": "https://api.openai.com/v1",
+                   "models": ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo"]},
+}
+
+_ANALYSIS_PROMPTS: dict[str, str] = {
+    "summary":   "请对以下直播间弹幕数据进行全面总结，包括：主要讨论话题、观众互动热点、整体氛围，给出结构化的分析报告。",
+    "sentiment": "请对以下直播间弹幕进行情感分析：正负情感比例、情绪变化趋势、引发强烈反应的话题或时刻，并给出结论。",
+    "topics":    "请从以下直播间弹幕中提取主要话题和高频关键词，按热度排序，分析每个话题的讨论背景和观众关注点。",
+    "gifts":     "请分析以下直播间的礼物互动数据：主要打赏用户、礼物种类与价值分布、打赏行为与弹幕互动的关联，给出总结。",
+    "users":     "请分析以下直播间的用户行为：活跃用户特征、互动规律、核心粉丝与路人观众的区别，总结用户群体画像。",
+    "highlight": "请从以下直播间弹幕中找出最精彩、最有趣、最有代表性的弹幕片段，解释为何选择这些内容，并还原当时的互动场景。",
+}
+
+
+@app.get("/api/analyze/providers")
+async def get_providers() -> JSONResponse:
+    return JSONResponse({pid: {"name": p["name"], "models": p["models"]} for pid, p in _PROVIDERS.items()})
+
+
+async def _build_analysis_context(session_id: str) -> str | None:
+    """将会话数据拼装成结构化文本，作为 AI 提示的上下文。"""
+    async with AsyncSessionLocal() as db:
+        sess_r = await db.execute(select(Session).where(Session.id == session_id))
+        session = sess_r.scalar_one_or_none()
+        if not session:
+            return None
+
+        counts_r = await db.execute(
+            select(Message.msg_type, func.count().label("n"))
+            .where(Message.session_id == session_id).group_by(Message.msg_type)
+        )
+        counts = {r.msg_type: r.n for r in counts_r}
+
+        chat_r = await db.execute(
+            select(Message)
+            .where(Message.session_id == session_id, Message.msg_type == "chat")
+            .order_by(Message.timestamp.asc()).limit(400)
+        )
+        chats = chat_r.scalars().all()
+
+        gift_r = await db.execute(
+            select(Message)
+            .where(Message.session_id == session_id, Message.msg_type == "gift")
+            .order_by(Message.timestamp.asc()).limit(100)
+        )
+        gifts = gift_r.scalars().all()
+
+        top_r = await db.execute(
+            select(Message.username, func.count().label("n"))
+            .where(Message.session_id == session_id, Message.msg_type == "chat")
+            .group_by(Message.username).order_by(text("n desc")).limit(10)
+        )
+        top_users = top_r.all()
+
+    lines: list[str] = []
+    lines.append(f"【直播会话信息】")
+    lines.append(f"平台：{session.platform}  主播：{session.streamer_id}")
+    lines.append(f"开始时间：{str(session.started_at)[:19]}  状态：{session.status}")
+    lines.append("")
+    lines.append("【互动数据概览】")
+    lines.append(f"弹幕 {counts.get('chat', 0)} 条 | 礼物 {counts.get('gift', 0)} 次 | "
+                 f"点赞 {counts.get('like', 0)} 次 | 进场 {counts.get('enter', 0)} 次 | "
+                 f"关注 {counts.get('subscribe', 0)} 次")
+    lines.append("")
+
+    if top_users:
+        lines.append("【弹幕活跃用户 Top10】")
+        for i, u in enumerate(top_users, 1):
+            lines.append(f"{i}. {u.username}（{u.n} 条）")
+        lines.append("")
+
+    if gifts:
+        import json as _json
+        lines.append(f"【礼物列表（共 {len(gifts)} 条）】")
+        for g in gifts:
+            extra = {}
+            try:
+                extra = _json.loads(g.extra or "{}")
+            except Exception:
+                pass
+            repeat = extra.get("repeat_count", 1)
+            lines.append(f"[{str(g.timestamp)[11:19]}] {g.username} 送出 {g.content} × {repeat}")
+        lines.append("")
+
+    if chats:
+        lines.append(f"【弹幕内容（共采集 {counts.get('chat', 0)} 条，展示 {len(chats)} 条）】")
+        for m in chats:
+            lines.append(f"[{str(m.timestamp)[11:19]}] {m.username}：{m.content}")
+
+    return "\n".join(lines)
+
+
+@app.post("/api/sessions/{session_id}/analyze")
+async def analyze_session(session_id: str, body: dict) -> StreamingResponse:
+    """
+    多轮对话接口。
+    body: { provider, api_key, model, messages: [{role, content}, ...] }
+    系统提示（含直播数据上下文）由服务端自动注入。
+    """
+    import json as _json
+    import httpx
+
+    provider_id  = body.get("provider", "deepseek")
+    api_key      = body.get("api_key", "").strip()
+    model        = body.get("model", "").strip()
+    messages     = body.get("messages", [])
+
+    if not api_key:
+        return JSONResponse({"error": "请先填写 API Key"}, status_code=400)
+    if not model:
+        return JSONResponse({"error": "请选择或填写模型名称"}, status_code=400)
+    if not messages:
+        return JSONResponse({"error": "messages 不能为空"}, status_code=400)
+
+    context = await _build_analysis_context(session_id)
+    if not context:
+        return JSONResponse({"error": "找不到该会话数据"}, status_code=404)
+
+    system_prompt = (
+        "你是 LiveScope 直播数据分析助手，专门分析直播间弹幕、礼物、互动数据。"
+        "请用中文回答，结果使用 Markdown 格式，结构清晰、重点突出。\n\n"
+        f"以下是本场直播的完整数据，请基于此回答用户问题：\n\n{context}"
+    )
+
+    prov     = _PROVIDERS.get(provider_id, list(_PROVIDERS.values())[0])
+    base_url = prov["base_url"]
+    headers  = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type":  "application/json",
+        **prov.get("extra_headers", {}),
+    }
+
+    async def _stream():
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                async with client.stream(
+                    "POST", f"{base_url}/chat/completions",
+                    headers=headers,
+                    json={"model": model,
+                          "messages": [{"role": "system", "content": system_prompt}] + messages,
+                          "stream": True, "temperature": 0.7},
+                ) as resp:
+                    if resp.status_code != 200:
+                        raw = await resp.aread()
+                        err_text = raw[:300].decode(errors='replace')
+                        yield f"data: {_json.dumps({'error': f'API 错误 {resp.status_code}: {err_text}'})}\n\n"
+                        return
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        data = line[6:]
+                        if data.strip() == "[DONE]":
+                            yield "data: [DONE]\n\n"
+                            return
+                        try:
+                            chunk = _json.loads(data)
+                            delta = chunk["choices"][0]["delta"].get("content", "")
+                            if delta:
+                                yield f"data: {_json.dumps({'content': delta})}\n\n"
+                        except Exception:
+                            pass
+        except Exception as exc:
+            yield f"data: {_json.dumps({'error': str(exc)})}\n\n"
+
+    return StreamingResponse(_stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 # ── 翻译 ──────────────────────────────────────────────────────────────────────
