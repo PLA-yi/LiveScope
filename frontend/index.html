@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>LiveScope 数据看板</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<style>
+:root{
+  --bg:#0d0f1a;--s1:#161927;--s2:#1e2236;--bd:#252942;
+  --ac:#7c6af7;--cy:#06b6d4;--gn:#22c55e;--rd:#ef4444;
+  --yw:#f59e0b;--or:#f97316;--tx:#e2e8f0;--mu:#64748b;--r:10px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif;
+  background:var(--bg);color:var(--tx);font-size:14px;display:flex;flex-direction:column}
+
+/* ── HEADER ── */
+header{height:52px;display:flex;align-items:center;justify-content:space-between;
+  padding:0 18px;background:var(--s1);border-bottom:1px solid var(--bd);flex-shrink:0;gap:10px}
+.logo{font-size:16px;font-weight:800;background:linear-gradient(135deg,#a78bfa,var(--cy));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;white-space:nowrap}
+.hdr-right{display:flex;align-items:center;gap:8px}
+#live-badge{display:none;align-items:center;gap:5px;
+  background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.35);
+  border-radius:100px;padding:3px 10px;font-size:12px;color:var(--gn)}
+#live-badge.on{display:flex}
+.dot-live{width:6px;height:6px;border-radius:50%;background:var(--gn);animation:pulse 1.5s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.btn{background:var(--s2);border:1px solid var(--bd);color:var(--tx);
+  border-radius:6px;padding:5px 12px;cursor:pointer;font-size:13px;
+  transition:border-color .2s,background .2s;white-space:nowrap}
+.btn:hover{border-color:var(--ac)}
+.btn-icon{padding:5px 9px;font-size:15px}
+.btn-red{background:rgba(239,68,68,.12);border-color:rgba(239,68,68,.4);color:#fca5a5}
+.btn-red:hover{background:rgba(239,68,68,.22)}
+
+/* ── LAYOUT ── */
+.layout{flex:1;display:grid;grid-template-columns:230px 1fr;min-height:0;overflow:hidden}
+
+/* ── SIDEBAR ── */
+aside{background:var(--s1);border-right:1px solid var(--bd);display:flex;flex-direction:column;overflow:hidden}
+.aside-hd{padding:12px 14px 8px;font-size:11px;font-weight:600;
+  color:var(--mu);text-transform:uppercase;letter-spacing:.6px;flex-shrink:0}
+.collect-form{padding:0 12px 12px;display:flex;flex-direction:column;gap:6px;
+  border-bottom:1px solid var(--bd);flex-shrink:0}
+select,input[type=text],input[type=password]{flex:1;background:var(--s2);border:1px solid var(--bd);
+  color:var(--tx);border-radius:6px;padding:6px 10px;font-size:13px;outline:none;transition:border-color .2s}
+select:focus,input[type=text]:focus,input[type=password]:focus{border-color:var(--ac)}
+select{cursor:pointer;width:100%}
+#start-btn{width:100%;padding:7px;font-size:13px;font-weight:600;
+  background:linear-gradient(135deg,rgba(124,106,247,.25),rgba(6,182,212,.2));
+  border:1px solid rgba(124,106,247,.4);color:#c4b5fd;border-radius:6px;cursor:pointer;transition:all .2s}
+#start-btn:hover{background:linear-gradient(135deg,rgba(124,106,247,.38),rgba(6,182,212,.3))}
+#start-btn:disabled{opacity:.4;cursor:default}
+.form-err{font-size:11px;color:var(--rd);min-height:14px}
+.session-list-hd{padding:10px 14px 6px;font-size:11px;font-weight:600;
+  color:var(--mu);text-transform:uppercase;letter-spacing:.6px;flex-shrink:0}
+#session-list{flex:1;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--bd) transparent}
+.sess-item{padding:9px 14px;cursor:pointer;border-left:3px solid transparent;transition:background .15s}
+.sess-item:hover{background:var(--s2)}
+.sess-item.active{background:rgba(124,106,247,.1);border-left-color:var(--ac)}
+.sess-platform{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--mu);margin-bottom:2px}
+.pdot{width:6px;height:6px;border-radius:50%}
+.pdot.tiktok{background:#ff0050}.pdot.douyin{background:#00f2ea}
+.sess-name{font-weight:600;font-size:13px}
+.sess-meta{font-size:11px;color:var(--mu);margin-top:2px}
+.sess-status{display:inline-block;padding:1px 6px;border-radius:100px;font-size:10px;margin-top:3px}
+.ss-live{background:rgba(34,197,94,.12);color:var(--gn)}
+.ss-ended{background:rgba(100,116,139,.12);color:var(--mu)}
+
+/* ── MAIN ── */
+main{display:flex;flex-direction:column;overflow:hidden;min-height:0}
+#empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;
+  flex:1;gap:12px;color:var(--mu);font-size:14px}
+#empty-state svg{opacity:.25}
+.stats-row{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;
+  padding:12px 14px;flex-shrink:0;border-bottom:1px solid var(--bd)}
+.stat-card{background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);padding:10px 12px}
+.stat-lbl{font-size:11px;color:var(--mu);margin-bottom:4px}
+.stat-val{font-size:22px;font-weight:700;line-height:1}
+.sc0 .stat-val{color:var(--tx)}.sc1 .stat-val{color:var(--ac)}
+.sc2 .stat-val{color:var(--or)}.sc3 .stat-val{color:var(--rd)}.sc4 .stat-val{color:var(--cy)}
+.content-area{flex:1;display:grid;grid-template-columns:1fr 280px;
+  grid-template-rows:1fr 190px;min-height:0;overflow:hidden}
+.msg-panel{grid-row:1/3;display:flex;flex-direction:column;border-right:1px solid var(--bd);overflow:hidden}
+.panel-hdr{display:flex;align-items:center;justify-content:space-between;
+  padding:8px 12px;border-bottom:1px solid var(--bd);flex-shrink:0;gap:6px}
+.panel-title{font-size:11px;font-weight:600;color:var(--mu);
+  text-transform:uppercase;letter-spacing:.5px;white-space:nowrap}
+.panel-hdr-right{display:flex;align-items:center;gap:4px}
+.type-tabs{display:flex;gap:3px}
+.ttab{padding:3px 9px;border-radius:5px;font-size:12px;cursor:pointer;
+  background:transparent;border:1px solid transparent;color:var(--mu);transition:all .15s}
+.ttab:hover{border-color:var(--bd);color:var(--tx)}
+.ttab.on{background:rgba(124,106,247,.14);border-color:rgba(124,106,247,.4);color:var(--ac)}
+
+/* 翻译切换按钮 */
+.translate-toggle{display:flex;align-items:center;gap:5px;padding:3px 9px;border-radius:5px;
+  font-size:12px;cursor:pointer;background:transparent;border:1px solid var(--bd);
+  color:var(--mu);transition:all .2s;white-space:nowrap}
+.translate-toggle:hover{border-color:var(--cy);color:var(--cy)}
+.translate-toggle.on{background:rgba(6,182,212,.12);border-color:rgba(6,182,212,.45);color:var(--cy)}
+.tl-dot{width:5px;height:5px;border-radius:50%;background:currentColor;opacity:.6}
+.translate-toggle.on .tl-dot{opacity:1;box-shadow:0 0 4px var(--cy)}
+
+#msg-feed{flex:1;overflow-y:auto;padding:4px 0;
+  scrollbar-width:thin;scrollbar-color:var(--bd) transparent}
+.msg-row{display:flex;align-items:baseline;gap:7px;padding:4px 12px;
+  transition:background .1s;animation:fi .25s ease;flex-wrap:wrap}
+@keyframes fi{from{opacity:0;transform:translateY(3px)}to{opacity:1}}
+.msg-row:hover{background:var(--s2)}
+.msg-ts{font-size:11px;color:var(--mu);flex-shrink:0;width:50px}
+.msg-user{font-size:12px;color:var(--cy);flex-shrink:0;max-width:96px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.msg-user-link{text-decoration:none;border-bottom:1px dashed rgba(6,182,212,.4);transition:color .15s}
+.msg-user-link:hover{color:#67e8f9;border-bottom-color:var(--cy)}
+.msg-text{font-size:13px;color:var(--tx);word-break:break-all}
+.mbadge{font-size:10px;padding:1px 5px;border-radius:3px;flex-shrink:0}
+.bg-gift{background:rgba(249,115,22,.14);color:var(--or)}
+.bg-like{background:rgba(239,68,68,.14);color:var(--rd)}
+.bg-enter{background:rgba(100,116,139,.12);color:var(--mu)}
+.bg-sub{background:rgba(34,197,94,.12);color:var(--gn)}
+/* 翻译结果行 */
+.msg-tl{width:100%;padding-left:57px;font-size:12px;color:var(--mu);
+  border-left:2px solid rgba(6,182,212,.25);margin-top:1px;word-break:break-all;
+  animation:fi .3s ease}
+.msg-tl.loading{opacity:.4}
+.msg-empty{padding:24px;text-align:center;color:var(--mu);font-size:13px}
+.right-top{border-bottom:1px solid var(--bd);display:flex;flex-direction:column;overflow:hidden}
+#top-users{flex:1;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--bd) transparent}
+.u-row{display:flex;align-items:center;gap:7px;padding:6px 12px}
+.u-rank{font-size:11px;color:var(--mu);width:16px;text-align:right;flex-shrink:0}
+.u-rank.gold{color:var(--yw);font-weight:700}
+.u-body{flex:1;min-width:0}
+.u-name{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:2px}
+.u-bar-bg{height:3px;background:var(--bd);border-radius:2px}
+.u-bar{height:3px;border-radius:2px;background:linear-gradient(90deg,var(--ac),var(--cy));transition:width .4s}
+.u-cnt{font-size:11px;color:var(--mu);flex-shrink:0}
+.right-bottom{display:flex;flex-direction:column;overflow:hidden}
+#chart-wrap{flex:1;position:relative;padding:4px 8px 6px}
+.session-hdr{display:flex;align-items:center;justify-content:space-between;
+  padding:8px 14px;border-bottom:1px solid var(--bd);flex-shrink:0;gap:8px}
+.session-hdr-info{display:flex;align-items:center;gap:8px;min-width:0}
+.session-hdr-name{font-weight:700;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.session-hdr-meta{font-size:12px;color:var(--mu);white-space:nowrap}
+
+/* ── 模态框通用 ── */
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);
+  z-index:1000;align-items:center;justify-content:center}
+.modal-overlay.on{display:flex}
+.modal{background:var(--s1);border:1px solid var(--bd);border-radius:14px;
+  width:460px;max-width:95vw;overflow:hidden;box-shadow:0 24px 80px rgba(0,0,0,.6)}
+.modal-hdr{display:flex;align-items:center;justify-content:space-between;
+  padding:16px 20px;border-bottom:1px solid var(--bd)}
+.modal-title{font-size:15px;font-weight:700}
+.modal-close{background:none;border:none;color:var(--mu);cursor:pointer;
+  font-size:18px;line-height:1;padding:2px 6px;border-radius:4px;transition:color .15s}
+.modal-close:hover{color:var(--tx)}
+.modal-body{padding:20px;display:flex;flex-direction:column;gap:14px}
+.modal-footer{padding:12px 20px;border-top:1px solid var(--bd);display:flex;justify-content:flex-end;gap:8px}
+.field{display:flex;flex-direction:column;gap:6px}
+.field label{font-size:12px;color:var(--mu);font-weight:500}
+.field input,.field select{width:100%}
+.field-hint{font-size:11px;color:var(--mu);margin-top:2px}
+.model-presets{display:flex;flex-wrap:wrap;gap:5px;margin-top:4px}
+.preset-chip{padding:2px 9px;border-radius:100px;font-size:11px;cursor:pointer;
+  background:var(--s2);border:1px solid var(--bd);color:var(--mu);transition:all .15s}
+.preset-chip:hover{border-color:var(--ac);color:var(--tx)}
+.save-btn{padding:7px 20px;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;
+  background:linear-gradient(135deg,rgba(124,106,247,.3),rgba(6,182,212,.2));
+  border:1px solid rgba(124,106,247,.45);color:#c4b5fd;transition:all .2s}
+.save-btn:hover{background:linear-gradient(135deg,rgba(124,106,247,.45),rgba(6,182,212,.3))}
+.cancel-btn{padding:7px 16px;border-radius:7px;font-size:13px;cursor:pointer;
+  background:transparent;border:1px solid var(--bd);color:var(--mu);transition:all .2s}
+.cancel-btn:hover{border-color:var(--tx);color:var(--tx)}
+.save-msg{font-size:12px;color:var(--gn);align-self:center;margin-right:auto}
+.key-status{display:inline-flex;align-items:center;gap:5px;font-size:12px;margin-top:4px}
+.key-status.set{color:var(--gn)}.key-status.unset{color:var(--mu)}
+
+/* 滚动条 */
+::-webkit-scrollbar{width:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--bd);border-radius:4px}
+</style>
+</head>
+<body>
+
+<!-- ── HEADER ── -->
+<header>
+  <div class="logo">⬡ LiveScope</div>
+  <div class="hdr-right">
+    <div id="live-badge"><span class="dot-live"></span>采集中</div>
+    <button class="btn btn-icon" onclick="openSettings()" title="模型设置">⚙️</button>
+    <button class="btn" onclick="refreshAll()">⟳ 刷新</button>
+  </div>
+</header>
+
+<!-- ── 主体 ── -->
+<div class="layout">
+
+  <!-- 侧边栏 -->
+  <aside>
+    <div class="aside-hd">开始采集</div>
+    <div class="collect-form">
+      <select id="f-platform" onchange="updateTargetPlaceholder()">
+        <option value="tiktok">🌐 TikTok</option>
+        <option value="douyin">🎵 抖音</option>
+      </select>
+      <input id="f-target" type="text" placeholder="@username"/>
+      <div class="form-err" id="form-err"></div>
+      <button id="start-btn" onclick="startCollect()">▶ 开始采集</button>
+    </div>
+    <div class="session-list-hd">历史会话</div>
+    <div id="session-list"><div class="msg-empty">加载中…</div></div>
+  </aside>
+
+  <!-- 主区域 -->
+  <main id="main">
+    <div id="empty-state">
+      <svg width="52" height="52" viewBox="0 0 24 24" fill="none">
+        <rect x="3" y="3" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M9 9h6M9 12h6M9 15h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+      ← 选择会话，或输入主播信息开始采集
+    </div>
+  </main>
+
+</div>
+
+<!-- ── 设置模态框 ── -->
+<div class="modal-overlay" id="settings-modal" onclick="if(event.target===this)closeSettings()">
+  <div class="modal">
+    <div class="modal-hdr">
+      <span class="modal-title">⚙️ 模型接入设置</span>
+      <button class="modal-close" onclick="closeSettings()">✕</button>
+    </div>
+    <div class="modal-body">
+
+      <div class="field">
+        <label>抖音 Cookie <span style="font-weight:400;color:var(--mt);font-size:12px">（抖音采集必填）</span></label>
+        <textarea id="set-douyin-cookie" rows="3"
+          placeholder="ttwid=xxx; __ac_nonce=xxx; sessionid=xxx; passport_csrf_token=xxx"
+          style="resize:vertical;font-size:12px;font-family:monospace"></textarea>
+        <div id="set-douyin-cookie-status" class="key-status unset">未设置</div>
+        <div class="field-hint">
+          Chrome → 登录抖音 → F12 → Application → Cookies → douyin.com，
+          复制 <code style="background:var(--bg2);padding:1px 4px;border-radius:3px">ttwid</code>、
+          <code style="background:var(--bg2);padding:1px 4px;border-radius:3px">sessionid</code>
+          等字段拼成一行
+        </div>
+      </div>
+
+      <div class="field">
+        <label>EulerStream API Key <span style="font-weight:400;color:var(--mt);font-size:12px">（TikTok 采集必填）</span></label>
+        <input id="set-euler-key" type="password" placeholder="es-…"/>
+        <div id="set-euler-key-status" class="key-status unset">未设置</div>
+        <div class="field-hint">免费注册：<a href="https://www.eulerstream.com/pricing" target="_blank"
+          style="color:var(--cy)">eulerstream.com/pricing</a>，解除 TikTok 连接速率限制</div>
+      </div>
+
+      <div class="field">
+        <label>OpenRouter API Key <span style="font-weight:400;color:var(--mt);font-size:12px">（弹幕翻译必填）</span></label>
+        <input id="set-key" type="password" placeholder="sk-or-v1-…"/>
+        <div id="set-key-status" class="key-status unset">未设置</div>
+        <div class="field-hint">前往 <a href="https://openrouter.ai/keys" target="_blank"
+          style="color:var(--cy)">openrouter.ai/keys</a> 获取 API Key</div>
+      </div>
+
+      <div class="field">
+        <label>翻译模型</label>
+        <select id="set-model-select" onchange="onModelSelectChange(this.value)">
+          <option value="openai/gpt-4o-mini">GPT-4o Mini（推荐，快速经济）</option>
+          <option value="openai/gpt-4o">GPT-4o（高质量）</option>
+          <option value="anthropic/claude-haiku-3-5">Claude Haiku 3.5（速度极快）</option>
+          <option value="google/gemini-flash-1.5">Gemini Flash 1.5（经济快速）</option>
+          <option value="deepseek/deepseek-chat">DeepSeek V3（中文友好）</option>
+          <option value="qwen/qwen-2.5-72b-instruct">Qwen 2.5 72B（中文优秀）</option>
+          <option value="__custom__">自定义模型名…</option>
+        </select>
+        <input id="set-model-custom" type="text" placeholder="输入完整模型 ID，如 meta-llama/llama-3.1-8b-instruct"
+               style="display:none;margin-top:6px"/>
+        <div class="field-hint">
+          查看全部可用模型：<a href="https://openrouter.ai/models" target="_blank"
+          style="color:var(--cy)">openrouter.ai/models</a>
+        </div>
+      </div>
+
+    </div>
+    <div class="modal-footer">
+      <span class="save-msg" id="set-save-msg"></span>
+      <button class="cancel-btn" onclick="closeSettings()">取消</button>
+      <button class="save-btn" onclick="saveSettings()">保存设置</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── 模型选择联动 ──────────────────────────────────────────────────────────────
+function onModelSelectChange(val){
+  $('set-model-custom').style.display = val === '__custom__' ? 'block' : 'none';
+}
+
+function getSelectedModel(){
+  const sel = $('set-model-select');
+  return sel.value === '__custom__'
+    ? $('set-model-custom').value.trim()
+    : sel.value;
+}
+
+function setModelUI(model){
+  const sel = $('set-model-select');
+  const opt = Array.from(sel.options).find(o => o.value === model);
+  if(opt){
+    sel.value = model;
+    $('set-model-custom').style.display = 'none';
+  } else {
+    sel.value = '__custom__';
+    $('set-model-custom').style.display = 'block';
+    $('set-model-custom').value = model;
+  }
+}
+
+// ── 全局状态 ──────────────────────────────────────────────────────────────────
+let curSession    = null;
+let curType       = 'chat';
+let pollTimer     = null;
+let lastMsgId     = 0;
+let autoScroll    = true;
+let chart         = null;
+let translateOn   = false;
+let translateQueue = [];   // [{id, el}] 等待翻译的消息
+let translateTimer = null;
+
+// ── 工具 ──────────────────────────────────────────────────────────────────────
+const $   = id => document.getElementById(id);
+const esc = s  => (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const fmt = n  => n>=10000?(n/10000).toFixed(1)+'w':n>=1000?(n/1000).toFixed(1)+'k':String(n||0);
+async function api(url, opts){ const r=await fetch(url,opts); return r.json(); }
+
+// ── 设置面板 ──────────────────────────────────────────────────────────────────
+async function openSettings(){
+  const s = await api('/api/settings');
+
+  // Douyin Cookie
+  $('set-douyin-cookie').value = '';
+  $('set-douyin-cookie').placeholder = s.douyin_cookie_set
+    ? '（已设置，输入新值可覆盖）'
+    : 'ttwid=xxx; __ac_nonce=xxx; sessionid=xxx; passport_csrf_token=xxx';
+  const douyinCookieEl = $('set-douyin-cookie-status');
+  if(s.douyin_cookie_set){
+    douyinCookieEl.className = 'key-status set';
+    douyinCookieEl.textContent = `✓ 已设置  ${s.douyin_cookie_masked}`;
+  } else {
+    douyinCookieEl.className = 'key-status unset';
+    douyinCookieEl.textContent = '未设置';
+  }
+
+  // EulerStream Key
+  $('set-euler-key').value = '';
+  $('set-euler-key').placeholder = s.eulerstream_api_key_set ? '（已设置，输入新值可覆盖）' : 'es-…';
+  const eulerEl = $('set-euler-key-status');
+  if(s.eulerstream_api_key_set){
+    eulerEl.className = 'key-status set';
+    eulerEl.textContent = `✓ 已设置  ${s.eulerstream_api_key_masked}`;
+  } else {
+    eulerEl.className = 'key-status unset';
+    eulerEl.textContent = '未设置';
+  }
+
+  // OpenRouter Key
+  $('set-key').value = '';
+  $('set-key').placeholder = s.openrouter_api_key_set ? '（已设置，输入新值可覆盖）' : 'sk-or-v1-…';
+  setModelUI(s.openrouter_model || 'openai/gpt-4o-mini');
+  const statusEl = $('set-key-status');
+  if(s.openrouter_api_key_set){
+    statusEl.className = 'key-status set';
+    statusEl.textContent = `✓ 已设置  ${s.openrouter_api_key_masked}`;
+  } else {
+    statusEl.className = 'key-status unset';
+    statusEl.textContent = '未设置';
+  }
+
+  $('set-save-msg').textContent = '';
+  $('settings-modal').classList.add('on');
+}
+
+function closeSettings(){ $('settings-modal').classList.remove('on'); }
+
+async function saveSettings(){
+  const douyinCookie = $('set-douyin-cookie').value.trim();
+  const eulerKey     = $('set-euler-key').value.trim();
+  const key          = $('set-key').value.trim();
+  const model        = getSelectedModel();
+  if(!model){ $('set-save-msg').style.color='var(--rd)'; $('set-save-msg').textContent='模型名不能为空'; return; }
+
+  const params = new URLSearchParams({ openrouter_model: model });
+  if(douyinCookie) params.append('douyin_cookie', douyinCookie);
+  if(eulerKey)     params.append('eulerstream_api_key', eulerKey);
+  if(key)          params.append('openrouter_api_key', key);
+
+  const res = await api(`/api/settings?${params}`, { method:'POST' });
+  if(res.status === 'saved'){
+    $('set-save-msg').style.color = 'var(--gn)';
+    $('set-save-msg').textContent = '✓ 已保存';
+    if(douyinCookie){
+      $('set-douyin-cookie').value = '';
+      $('set-douyin-cookie').placeholder = '（已设置，输入新值可覆盖）';
+      $('set-douyin-cookie-status').className = 'key-status set';
+      $('set-douyin-cookie-status').textContent = '✓ 已更新';
+    }
+    if(eulerKey){
+      $('set-euler-key').value = '';
+      $('set-euler-key').placeholder = '（已设置，输入新值可覆盖）';
+      $('set-euler-key-status').className = 'key-status set';
+      $('set-euler-key-status').textContent = '✓ 已更新';
+    }
+    if(key){
+      $('set-key').value = '';
+      $('set-key').placeholder = '（已设置，输入新值可覆盖）';
+      $('set-key-status').className = 'key-status set';
+      $('set-key-status').textContent = '✓ 已更新';
+    }
+    setTimeout(closeSettings, 1200);
+  }
+}
+
+// ── 翻译控制 ──────────────────────────────────────────────────────────────────
+function toggleTranslate(){
+  translateOn = !translateOn;
+  const btn = $('translate-btn');
+  btn.classList.toggle('on', translateOn);
+
+  if(translateOn){
+    // 对已有弹幕追加翻译占位
+    document.querySelectorAll('#msg-feed .msg-row[data-mid]').forEach(row=>{
+      if(!row.querySelector('.msg-tl')){
+        const content = row.querySelector('.msg-text')?.textContent;
+        if(content) enqueueTranslate(row.dataset.mid, row, content);
+      }
+    });
+    startTranslateTimer();
+  } else {
+    stopTranslateTimer();
+    // 移除所有翻译行
+    document.querySelectorAll('#msg-feed .msg-tl').forEach(el=>el.remove());
+    translateQueue = [];
+  }
+}
+
+function enqueueTranslate(mid, row, text){
+  if(!text || !text.trim()) return;
+  // 插入 loading 占位
+  let tl = row.querySelector('.msg-tl');
+  if(!tl){
+    tl = document.createElement('div');
+    tl.className = 'msg-tl loading';
+    tl.textContent = '翻译中…';
+    row.appendChild(tl);
+  }
+  translateQueue.push({ mid, el: tl, text });
+}
+
+function startTranslateTimer(){
+  if(translateTimer) return;
+  translateTimer = setInterval(flushTranslateQueue, 2500);
+  flushTranslateQueue(); // 立即执行一次
+}
+function stopTranslateTimer(){
+  clearInterval(translateTimer);
+  translateTimer = null;
+}
+
+async function flushTranslateQueue(){
+  if(!translateQueue.length) return;
+  // 取出最多 20 条
+  const batch = translateQueue.splice(0, 20);
+  const texts = batch.map(b=>b.text);
+  try{
+    const res = await api('/api/translate', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({texts})
+    });
+    if(res.error){
+      batch.forEach(b=>{ if(b.el){ b.el.textContent='['+res.error+']'; b.el.classList.remove('loading'); }});
+      return;
+    }
+    const tls = res.translations || [];
+    batch.forEach((b,i)=>{
+      if(b.el && b.el.isConnected){
+        b.el.classList.remove('loading');
+        b.el.textContent = tls[i] || '';
+        if(!tls[i]) b.el.remove();
+      }
+    });
+  } catch(e){
+    batch.forEach(b=>{ if(b.el) b.el.textContent=''; });
+  }
+}
+
+// ── 采集控制 ──────────────────────────────────────────────────────────────────
+async function startCollect(){
+  const platform = $('f-platform').value;
+  const target   = $('f-target').value.trim();
+  const wsurl    = ($('f-wsurl') && $('f-wsurl').value.trim()) || '';
+  const errEl    = $('form-err');
+  errEl.textContent = '';
+  if(!target){ errEl.textContent='请输入用户名或 room_id'; return; }
+
+  const btn = $('start-btn');
+  btn.disabled=true; btn.textContent='连接中…';
+  try{
+    let url = `/api/collect/start?platform=${encodeURIComponent(platform)}&target=${encodeURIComponent(target)}`;
+    const res = await api(url, {method:'POST'});
+    if(res.error){
+      errEl.textContent = res.error;
+      if(res.error.includes('room_id') && platform==='douyin'){
+        errEl.textContent += '  →  请直接输入直播间数字 ID（如：123456789）';
+      }
+      return;
+    }
+    $('f-target').value='';
+    await loadSessions();
+    const sessions=await api('/api/sessions');
+    const found=sessions.find(s=>s.id===res.session_id);
+    if(found) await selectSession(found);
+  } catch(e){ errEl.textContent='连接失败，请检查网络'; }
+  finally{ btn.disabled=false; btn.textContent='▶ 开始采集'; }
+}
+
+async function stopCollect(sessionId){
+  if(!confirm('确定停止该直播间的采集？')) return;
+  await api(`/api/collect/stop?session_id=${encodeURIComponent(sessionId)}`,{method:'POST'});
+  await loadSessions();
+  if(curSession?.id===sessionId){
+    curSession.status='ended';
+    clearInterval(pollTimer);
+    $('live-badge').classList.remove('on');
+    $('stop-btn')?.remove();
+  }
+}
+
+// ── 会话列表 ──────────────────────────────────────────────────────────────────
+async function loadSessions(){
+  const sessions=await api('/api/sessions');
+  const el=$('session-list');
+  $('live-badge').classList.toggle('on', sessions.some(s=>s.status==='live'));
+  if(!sessions.length){ el.innerHTML='<div class="msg-empty">暂无会话</div>'; return; }
+  el.innerHTML=sessions.map(s=>`
+    <div class="sess-item ${curSession?.id===s.id?'active':''}"
+         onclick='selectSession(${JSON.stringify(s).replace(/'/g,"&#39;")})'>
+      <div class="sess-platform">
+        <span class="pdot ${s.platform}"></span>
+        ${s.platform==='tiktok'?'TikTok':'抖音'}
+      </div>
+      <div class="sess-name">${esc(s.streamer_id)}</div>
+      <div class="sess-meta">${s.started_at||''}</div>
+      <span class="sess-status ${s.status==='live'?'ss-live':'ss-ended'}">
+        ${s.status==='live'?'● 采集中':'已结束'}
+      </span>
+    </div>`).join('');
+}
+
+// ── 选中会话 ──────────────────────────────────────────────────────────────────
+async function selectSession(s){
+  curSession=s; curType='chat'; lastMsgId=0; autoScroll=true;
+  translateOn=false; translateQueue=[];
+  clearInterval(pollTimer); stopTranslateTimer();
+  if(chart){ chart.destroy(); chart=null; }
+  renderFrame(s);
+  await Promise.all([loadStats(), loadMessages(true)]);
+  if(s.status==='live'){
+    pollTimer=setInterval(async()=>{ await pollNewMessages(); await loadStats(); },2500);
+  }
+}
+
+// ── 主框架 ────────────────────────────────────────────────────────────────────
+function renderFrame(s){
+  const isLive=s.status==='live';
+  $('main').innerHTML=`
+    <div class="session-hdr">
+      <div class="session-hdr-info">
+        <span class="pdot ${s.platform}" style="width:8px;height:8px;flex-shrink:0"></span>
+        <span class="session-hdr-name">${esc(s.streamer_id)}</span>
+        <span class="session-hdr-meta">${s.started_at||''}</span>
+        <span class="sess-status ${isLive?'ss-live':'ss-ended'}">${isLive?'● 采集中':'已结束'}</span>
+      </div>
+      ${isLive?`<button id="stop-btn" class="btn btn-red" onclick="stopCollect('${s.id}')">■ 停止采集</button>`:''}
+    </div>
+
+    <div class="stats-row">
+      <div class="stat-card sc0"><div class="stat-lbl">📊 总消息</div><div class="stat-val" id="s-total">-</div></div>
+      <div class="stat-card sc1"><div class="stat-lbl">💬 弹幕</div><div class="stat-val" id="s-chat">-</div></div>
+      <div class="stat-card sc2"><div class="stat-lbl">🎁 礼物</div><div class="stat-val" id="s-gift">-</div></div>
+      <div class="stat-card sc3"><div class="stat-lbl">❤️ 点赞</div><div class="stat-val" id="s-like">-</div></div>
+      <div class="stat-card sc4"><div class="stat-lbl">📥 进场</div><div class="stat-val" id="s-enter">-</div></div>
+    </div>
+
+    <div class="content-area">
+      <div class="msg-panel">
+        <div class="panel-hdr">
+          <span class="panel-title">消息流</span>
+          <div class="panel-hdr-right">
+            <div class="type-tabs">
+              <button class="ttab on"  onclick="switchType('chat',this)">弹幕</button>
+              <button class="ttab"     onclick="switchType('gift',this)">礼物</button>
+              <button class="ttab"     onclick="switchType('enter',this)">进场</button>
+              <button class="ttab"     onclick="switchType('all',this)">全部</button>
+            </div>
+            <button id="translate-btn" class="translate-toggle" onclick="toggleTranslate()">
+              <span class="tl-dot"></span>翻译
+            </button>
+          </div>
+        </div>
+        <div id="msg-feed"></div>
+      </div>
+
+      <div class="right-top">
+        <div class="panel-hdr"><span class="panel-title">🏆 弹幕 Top10</span></div>
+        <div id="top-users"></div>
+      </div>
+      <div class="right-bottom">
+        <div class="panel-hdr"><span class="panel-title">📈 弹幕活跃度</span></div>
+        <div id="chart-wrap"><canvas id="tc"></canvas></div>
+      </div>
+    </div>`;
+
+  $('msg-feed').addEventListener('scroll',e=>{
+    const el=e.target;
+    autoScroll=el.scrollTop+el.clientHeight>=el.scrollHeight-40;
+  });
+}
+
+// ── 统计 ──────────────────────────────────────────────────────────────────────
+async function loadStats(){
+  if(!curSession) return;
+  const stats=await api(`/api/sessions/${curSession.id}/stats`);
+  const c=stats.counts||{};
+  const set=(id,v)=>{ const el=$(id); if(el) el.textContent=fmt(v); };
+  set('s-total',stats.total); set('s-chat',c.chat);
+  set('s-gift',c.gift); set('s-like',c.like); set('s-enter',c.enter);
+  renderTopUsers(stats.top_users||[]);
+  renderChart(stats.timeline||[]);
+}
+
+function profileUrl(username, userId){
+  if(!curSession) return null;
+  if(curSession.platform==='tiktok')
+    return username ? `https://www.tiktok.com/@${encodeURIComponent(username)}` : null;
+  return userId  ? `https://www.douyin.com/user/${encodeURIComponent(userId)}` : null;
+}
+
+function renderTopUsers(users){
+  const el=$('top-users');
+  if(!el) return;
+  if(!users.length){ el.innerHTML='<div class="msg-empty">暂无弹幕数据</div>'; return; }
+  const max=users[0]?.count||1;
+  el.innerHTML=users.map((u,i)=>{
+    const url=profileUrl(u.username,u.user_id);
+    const nameEl=url
+      ? `<a class="u-name msg-user-link" href="${url}" target="_blank" rel="noopener">${esc(u.username||'匿名')}</a>`
+      : `<div class="u-name">${esc(u.username||'匿名')}</div>`;
+    return `<div class="u-row">
+      <span class="u-rank ${i<3?'gold':''}">${i+1}</span>
+      <div class="u-body">${nameEl}
+        <div class="u-bar-bg"><div class="u-bar" style="width:${Math.round(u.count/max*100)}%"></div></div>
+      </div>
+      <span class="u-cnt">${u.count}</span>
+    </div>`;
+  }).join('');
+}
+
+function renderChart(tl){
+  const canvas=$('tc'); if(!canvas) return;
+  const labels=tl.map(t=>t.minute), data=tl.map(t=>t.count);
+  if(chart){ chart.data.labels=labels; chart.data.datasets[0].data=data; chart.update('none'); return; }
+  chart=new Chart(canvas,{type:'bar',
+    data:{labels,datasets:[{data,backgroundColor:'rgba(124,106,247,.45)',
+      borderColor:'rgba(124,106,247,.85)',borderWidth:1,borderRadius:3}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
+      scales:{
+        x:{ticks:{color:'#64748b',font:{size:10},maxRotation:0,
+            callback:(_,i)=>i%Math.max(1,Math.ceil(labels.length/7))===0?labels[i]:''},
+           grid:{color:'rgba(37,41,66,.7)'}},
+        y:{ticks:{color:'#64748b',font:{size:10}},grid:{color:'rgba(37,41,66,.7)'},beginAtZero:true}
+      }}});
+}
+
+// ── 消息 ──────────────────────────────────────────────────────────────────────
+async function loadMessages(reset=false){
+  if(!curSession) return;
+  const feed=$('msg-feed'); if(!feed) return;
+  if(reset){ feed.innerHTML=''; lastMsgId=0; }
+  const msgs=await api(`/api/sessions/${curSession.id}/messages?type=${curType}&limit=300`);
+  if(!msgs.length){ if(reset) feed.innerHTML='<div class="msg-empty">暂无消息</div>'; return; }
+  appendMsgs(msgs, reset);
+  lastMsgId=msgs[msgs.length-1].id;
+}
+
+async function pollNewMessages(){
+  if(!curSession||!lastMsgId) return;
+  const feed=$('msg-feed'); if(!feed) return;
+  const msgs=await api(`/api/sessions/${curSession.id}/messages?type=${curType}&since_id=${lastMsgId}&limit=300`);
+  if(!msgs.length) return;
+  appendMsgs(msgs,false);
+  lastMsgId=msgs[msgs.length-1].id;
+}
+
+function appendMsgs(msgs, reset){
+  const feed=$('msg-feed'); if(!feed) return;
+  feed.querySelector('.msg-empty')?.remove();
+  const frag=document.createDocumentFragment();
+  msgs.forEach(m=>{
+    const div=document.createElement('div');
+    div.className=`msg-row msg-${m.msg_type}`;
+    div.dataset.mid=m.id;
+    let badge='', text=esc(m.content||'');
+    if(m.msg_type==='gift')     badge=`<span class="mbadge bg-gift">礼物</span>`;
+    if(m.msg_type==='like')   { badge=`<span class="mbadge bg-like">点赞</span>`; text=''; }
+    if(m.msg_type==='enter')  { badge=`<span class="mbadge bg-enter">进场</span>`; text=''; }
+    if(m.msg_type==='subscribe'){badge=`<span class="mbadge bg-sub">关注</span>`; text=''; }
+
+    const url=profileUrl(m.username, m.user_id);
+    const userEl=url
+      ? `<a class="msg-user msg-user-link" href="${url}" target="_blank" rel="noopener">${esc(m.username||'匿名')}</a>`
+      : `<span class="msg-user">${esc(m.username||'匿名')}</span>`;
+
+    div.innerHTML=`
+      <span class="msg-ts">${m.timestamp}</span>
+      ${badge}${userEl}
+      ${text?`<span class="msg-text">${text}</span>`:''}`;
+
+    // 如果翻译已开启，立即加入翻译队列
+    if(translateOn && m.msg_type==='chat' && m.content?.trim()){
+      const tl=document.createElement('div');
+      tl.className='msg-tl loading';
+      tl.textContent='翻译中…';
+      div.appendChild(tl);
+      translateQueue.push({mid:m.id, el:tl, text:m.content});
+    }
+    frag.appendChild(div);
+  });
+  feed.appendChild(frag);
+  if(autoScroll) feed.scrollTop=feed.scrollHeight;
+}
+
+function switchType(type,btn){
+  curType=type; lastMsgId=0; translateQueue=[];
+  document.querySelectorAll('.ttab').forEach(b=>b.classList.remove('on'));
+  btn.classList.add('on');
+  loadMessages(true);
+}
+
+async function refreshAll(){
+  await loadSessions();
+  if(curSession) await Promise.all([loadStats(),loadMessages(true)]);
+}
+
+$('f-target').addEventListener('keydown',e=>{ if(e.key==='Enter') startCollect(); });
+
+function updateTargetPlaceholder(){
+  const p = $('f-platform').value;
+  $('f-target').placeholder = p === 'tiktok'
+    ? '@username'
+    : '直播间数字 ID 或直播间 URL';
+  $('f-wsurl-row').style.display = p === 'douyin' ? 'block' : 'none';
+}
+updateTargetPlaceholder();
+(async()=>{ await loadSessions(); })();
+</script>
+</body>
+</html>

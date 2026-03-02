@@ -1,0 +1,1063 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TikTok & 抖音直播 AI 监控工具 — 技术可行性方案</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d2e;
+      --surface2: #252840;
+      --border: #2e3150;
+      --accent: #7c6af7;
+      --accent2: #06b6d4;
+      --accent3: #f97316;
+      --green: #22c55e;
+      --red: #ef4444;
+      --yellow: #eab308;
+      --text: #e2e8f0;
+      --text-muted: #94a3b8;
+      --code-bg: #0d1117;
+      --radius: 12px;
+      --radius-sm: 8px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      font-size: 15px;
+    }
+
+    /* ─── Header ─── */
+    header {
+      background: linear-gradient(135deg, #1a1d2e 0%, #2a1f5e 50%, #1a2e3b 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 60px 24px 48px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+    header::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse at 50% -20%, rgba(124,106,247,0.25) 0%, transparent 60%);
+      pointer-events: none;
+    }
+    .header-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(124,106,247,0.15);
+      border: 1px solid rgba(124,106,247,0.4);
+      border-radius: 100px;
+      padding: 4px 14px;
+      font-size: 12px;
+      color: #a78bfa;
+      margin-bottom: 20px;
+      letter-spacing: 0.5px;
+    }
+    header h1 {
+      font-size: clamp(24px, 4vw, 42px);
+      font-weight: 800;
+      line-height: 1.2;
+      background: linear-gradient(135deg, #fff 0%, #a78bfa 50%, #06b6d4 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 12px;
+    }
+    header p {
+      color: var(--text-muted);
+      font-size: 16px;
+      max-width: 640px;
+      margin: 0 auto 24px;
+    }
+    .header-meta {
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+    .meta-chip {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--border);
+      border-radius: 100px;
+      padding: 4px 12px;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    .dot { width: 6px; height: 6px; border-radius: 50%; }
+    .dot-green { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .dot-purple { background: var(--accent); }
+    .dot-cyan { background: var(--accent2); }
+
+    /* ─── Layout ─── */
+    .container { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+
+    /* ─── Nav ─── */
+    nav {
+      background: rgba(26,29,46,0.95);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .nav-inner {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0 24px;
+      display: flex;
+      gap: 4px;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .nav-inner::-webkit-scrollbar { display: none; }
+    nav a {
+      display: inline-block;
+      padding: 14px 16px;
+      color: var(--text-muted);
+      text-decoration: none;
+      white-space: nowrap;
+      font-size: 13px;
+      border-bottom: 2px solid transparent;
+      transition: all 0.2s;
+    }
+    nav a:hover { color: var(--text); border-color: var(--accent); }
+
+    /* ─── Section ─── */
+    section { padding: 60px 0; border-bottom: 1px solid var(--border); }
+    section:last-child { border-bottom: none; }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 32px;
+    }
+    .section-num {
+      display: flex; align-items: center; justify-content: center;
+      width: 36px; height: 36px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+    h2 { font-size: 24px; font-weight: 700; }
+    h3 {
+      font-size: 17px;
+      font-weight: 600;
+      color: var(--text);
+      margin: 28px 0 16px;
+      padding-left: 12px;
+      border-left: 3px solid var(--accent);
+    }
+    h4 { font-size: 15px; font-weight: 600; color: var(--accent2); margin: 20px 0 10px; }
+
+    /* ─── Goal Cards ─── */
+    .goal-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+    }
+    .goal-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      position: relative;
+      overflow: hidden;
+      transition: border-color 0.2s, transform 0.2s;
+    }
+    .goal-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+    .goal-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+    }
+    .goal-card:nth-child(1)::before { background: linear-gradient(90deg, var(--accent), #a78bfa); }
+    .goal-card:nth-child(2)::before { background: linear-gradient(90deg, var(--accent2), #67e8f9); }
+    .goal-card:nth-child(3)::before { background: linear-gradient(90deg, var(--accent3), #fbbf24); }
+    .card-icon { font-size: 32px; margin-bottom: 12px; }
+    .card-title { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+    .card-desc { font-size: 13px; color: var(--text-muted); line-height: 1.6; }
+
+    /* ─── Table ─── */
+    .table-wrap { overflow-x: auto; margin: 16px 0; border-radius: var(--radius); border: 1px solid var(--border); }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    thead { background: var(--surface2); }
+    th {
+      padding: 12px 16px;
+      text-align: left;
+      font-weight: 600;
+      color: var(--text-muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid var(--border);
+    }
+    td { padding: 12px 16px; border-bottom: 1px solid rgba(46,49,80,0.5); }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255,255,255,0.02); }
+
+    /* ─── Badge ─── */
+    .badge {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 2px 8px;
+      border-radius: 100px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .badge-green { background: rgba(34,197,94,0.15); color: var(--green); border: 1px solid rgba(34,197,94,0.3); }
+    .badge-yellow { background: rgba(234,179,8,0.15); color: var(--yellow); border: 1px solid rgba(234,179,8,0.3); }
+    .badge-red { background: rgba(239,68,68,0.15); color: var(--red); border: 1px solid rgba(239,68,68,0.3); }
+    .badge-gray { background: rgba(148,163,184,0.1); color: var(--text-muted); border: 1px solid var(--border); }
+
+    /* ─── Code Block ─── */
+    .code-block {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      margin: 16px 0;
+      overflow: hidden;
+    }
+    .code-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,0.02);
+    }
+    .code-lang {
+      font-size: 12px;
+      color: var(--accent);
+      font-family: 'JetBrains Mono', 'Consolas', monospace;
+      font-weight: 600;
+    }
+    .code-dots { display: flex; gap: 6px; }
+    .code-dots span {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+    }
+    .code-dots span:nth-child(1) { background: #ff5f57; }
+    .code-dots span:nth-child(2) { background: #febc2e; }
+    .code-dots span:nth-child(3) { background: #28c840; }
+    pre {
+      padding: 20px;
+      overflow-x: auto;
+      font-size: 13px;
+      line-height: 1.7;
+    }
+    code {
+      font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+      color: #e2e8f0;
+    }
+    /* Syntax highlighting */
+    .kw { color: #c792ea; }
+    .fn { color: #82aaff; }
+    .str { color: #c3e88d; }
+    .cm { color: #546e7a; font-style: italic; }
+    .num { color: #f78c6c; }
+    .tag { color: #89ddff; }
+    .dec { color: #ffcb6b; }
+
+    /* ─── Architecture Diagram ─── */
+    .arch-diagram {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px;
+      font-family: 'JetBrains Mono', 'Consolas', monospace;
+      font-size: 13px;
+      line-height: 1.8;
+      color: var(--text);
+      overflow-x: auto;
+    }
+    .arch-layer {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 16px 20px;
+      margin: 12px 0;
+      position: relative;
+    }
+    .arch-layer-title {
+      position: absolute;
+      top: -11px; left: 16px;
+      background: var(--bg);
+      padding: 0 8px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent);
+    }
+    .arch-row {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      justify-content: center;
+      margin-top: 8px;
+    }
+    .arch-box {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 10px 16px;
+      font-size: 13px;
+      text-align: center;
+      min-width: 160px;
+    }
+    .arch-box.accent { border-color: var(--accent); color: #a78bfa; }
+    .arch-box.cyan { border-color: var(--accent2); color: #67e8f9; }
+    .arch-box.orange { border-color: var(--accent3); color: #fb923c; }
+    .arch-box.green { border-color: var(--green); color: #4ade80; }
+    .arch-arrow {
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 20px;
+      margin: 4px 0;
+    }
+
+    /* ─── Stack Grid ─── */
+    .stack-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 12px;
+    }
+    .stack-item {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 16px;
+      transition: border-color 0.2s;
+    }
+    .stack-item:hover { border-color: var(--accent); }
+    .stack-layer { font-size: 11px; color: var(--accent); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+    .stack-name { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+    .stack-reason { font-size: 12px; color: var(--text-muted); }
+
+    /* ─── Milestone ─── */
+    .milestones { position: relative; padding-left: 32px; }
+    .milestones::before {
+      content: '';
+      position: absolute;
+      left: 0; top: 12px; bottom: 12px;
+      width: 2px;
+      background: linear-gradient(180deg, var(--accent), var(--accent2));
+      border-radius: 2px;
+    }
+    .milestone {
+      position: relative;
+      margin-bottom: 28px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 20px 20px 20px 24px;
+      transition: border-color 0.2s;
+    }
+    .milestone:hover { border-color: var(--accent); }
+    .milestone::before {
+      content: '';
+      position: absolute;
+      left: -38px; top: 20px;
+      width: 12px; height: 12px;
+      border-radius: 50%;
+      background: var(--accent);
+      border: 2px solid var(--bg);
+      box-shadow: 0 0 0 3px rgba(124,106,247,0.3);
+    }
+    .milestone-phase {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .phase-title { font-weight: 700; font-size: 15px; }
+    .phase-weeks {
+      background: rgba(124,106,247,0.12);
+      border: 1px solid rgba(124,106,247,0.3);
+      border-radius: 100px;
+      padding: 2px 10px;
+      font-size: 12px;
+      color: var(--accent);
+    }
+    .milestone-tasks { list-style: none; }
+    .milestone-tasks li {
+      padding: 4px 0;
+      font-size: 13px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+    }
+    .milestone-tasks li::before {
+      content: '✓';
+      color: var(--green);
+      font-weight: 700;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    /* ─── Challenge Cards ─── */
+    .challenge-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+    .challenge-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+    }
+    .challenge-title {
+      display: flex; align-items: center; gap: 10px;
+      font-weight: 700; margin-bottom: 14px;
+    }
+    .challenge-icon { font-size: 22px; }
+    .risk-item {
+      display: flex; align-items: flex-start; gap: 10px;
+      padding: 8px 0;
+      border-bottom: 1px solid rgba(46,49,80,0.5);
+      font-size: 13px;
+    }
+    .risk-item:last-child { border-bottom: none; }
+    .risk-label { color: var(--text-muted); min-width: 100px; flex-shrink: 0; }
+    .risk-solution { color: var(--text); }
+
+    /* ─── Warning ─── */
+    .warning-box {
+      background: rgba(234,179,8,0.08);
+      border: 1px solid rgba(234,179,8,0.3);
+      border-radius: var(--radius-sm);
+      padding: 20px 24px;
+      margin-top: 16px;
+    }
+    .warning-box h4 { color: var(--yellow); margin-bottom: 12px; margin-top: 0; }
+    .warning-box ol { padding-left: 20px; }
+    .warning-box li { font-size: 13px; color: var(--text-muted); padding: 4px 0; line-height: 1.6; }
+
+    /* ─── SQL Table ─── */
+    .sql-block { font-family: 'JetBrains Mono', monospace; }
+    .sql-kw { color: #c792ea; }
+    .sql-type { color: #ffcb6b; }
+    .sql-str { color: #c3e88d; }
+    .sql-cm { color: #546e7a; font-style: italic; }
+
+    /* ─── Footer ─── */
+    footer {
+      text-align: center;
+      padding: 40px 24px;
+      color: var(--text-muted);
+      font-size: 13px;
+      border-top: 1px solid var(--border);
+    }
+    footer strong { color: var(--accent); }
+
+    @media (max-width: 640px) {
+      header { padding: 40px 16px 32px; }
+      .container { padding: 0 16px; }
+      section { padding: 40px 0; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ─── Header ─────────────────────────────────── -->
+<header>
+  <div class="header-badge">
+    <span class="dot dot-green"></span>
+    技术可行性方案 v1.0
+  </div>
+  <h1>TikTok & 抖音直播间<br>AI 监控工具</h1>
+  <p>实时弹幕采集 · 全场内容归档 · AI 智能问答</p>
+  <div class="header-meta">
+    <div class="meta-chip"><span class="dot dot-purple"></span> 2026-03-02</div>
+    <div class="meta-chip"><span class="dot dot-cyan"></span> Python + Claude API</div>
+    <div class="meta-chip"><span class="dot dot-green"></span> 技术可行</div>
+  </div>
+</header>
+
+<!-- ─── Nav ─────────────────────────────────────── -->
+<nav>
+  <div class="nav-inner">
+    <a href="#goals">项目目标</a>
+    <a href="#collection">数据采集</a>
+    <a href="#processing">数据处理</a>
+    <a href="#ai">AI 处理</a>
+    <a href="#storage">存储设计</a>
+    <a href="#architecture">系统架构</a>
+    <a href="#stack">技术栈</a>
+    <a href="#challenges">挑战应对</a>
+    <a href="#milestones">里程碑</a>
+    <a href="#compliance">合规声明</a>
+  </div>
+</nav>
+
+<main class="container">
+
+  <!-- ─── 1. Goals ──────────────────────────────── -->
+  <section id="goals">
+    <div class="section-header">
+      <div class="section-num">1</div>
+      <h2>项目目标概述</h2>
+    </div>
+    <div class="goal-cards">
+      <div class="goal-card">
+        <div class="card-icon">💬</div>
+        <div class="card-title">弹幕实时采集</div>
+        <div class="card-desc">实时抓取 TikTok 和抖音直播间的用户弹幕消息，支持消息分类（弹幕、礼物、点赞、进场）与持久化存储。</div>
+      </div>
+      <div class="goal-card">
+        <div class="card-icon">📄</div>
+        <div class="card-title">内容归档 · Markdown 文档</div>
+        <div class="card-desc">将整场直播的弹幕与主题自动转化为结构化 Markdown 文档，包含时间线、关键词、情绪分析等维度。</div>
+      </div>
+      <div class="goal-card">
+        <div class="card-icon">🤖</div>
+        <div class="card-title">AI 智能问答</div>
+        <div class="card-desc">基于直播内容建立 RAG 知识库，支持自然语言检索与问答，随时询问 AI 关于直播内容的任意问题。</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── 2. Data Collection ──────────────────────── -->
+  <section id="collection">
+    <div class="section-header">
+      <div class="section-num">2</div>
+      <h2>数据采集层</h2>
+    </div>
+
+    <h3>TikTok（国际版）</h3>
+    <p style="color:var(--text-muted);font-size:14px;margin-bottom:16px;">TikTok 直播通过 <strong style="color:var(--text)">WebSocket + Protobuf</strong> 协议传输弹幕，社区已有成熟逆向库。</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>方案</th><th>库 / 工具</th><th>可用性</th><th>备注</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>开源逆向库</td>
+            <td><code>TikTokLive</code>（Python）</td>
+            <td><span class="badge badge-green">✓ 可用</span></td>
+            <td>无需账号，仅需主播用户名</td>
+          </tr>
+          <tr>
+            <td>官方 API</td>
+            <td>TikTok Display API</td>
+            <td><span class="badge badge-yellow">⚠ 受限</span></td>
+            <td>仅授权合作伙伴</td>
+          </tr>
+          <tr>
+            <td>浏览器自动化</td>
+            <td>Playwright / Puppeteer</td>
+            <td><span class="badge badge-green">✓ 备用</span></td>
+            <td>抗封禁强，资源消耗大</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="code-block">
+      <div class="code-header">
+        <div class="code-dots"><span></span><span></span><span></span></div>
+        <span class="code-lang">Python · TikTokLive 示例</span>
+      </div>
+      <pre><code><span class="kw">from</span> TikTokLive <span class="kw">import</span> <span class="dec">TikTokLiveClient</span>
+<span class="kw">from</span> TikTokLive.events <span class="kw">import</span> <span class="dec">CommentEvent</span>
+
+client = <span class="fn">TikTokLiveClient</span>(unique_id=<span class="str">"@主播用户名"</span>)
+
+<span class="tag">@client.on</span>(<span class="dec">CommentEvent</span>)
+<span class="kw">async def</span> <span class="fn">on_comment</span>(event: <span class="dec">CommentEvent</span>):
+    <span class="fn">print</span>(<span class="str">f"[{event.user.nickname}]: {event.comment}"</span>)
+
+client.<span class="fn">run</span>()</code></pre>
+    </div>
+
+    <h3>抖音（国内版）</h3>
+    <p style="color:var(--text-muted);font-size:14px;margin-bottom:16px;">抖音直播使用 <strong style="color:var(--text)">WebSocket + Protobuf</strong>，协议与 TikTok 存在差异，需处理签名算法。</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>方案</th><th>库 / 工具</th><th>可用性</th><th>备注</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>开源逆向库</td>
+            <td><code>douyin-live</code>、<code>dy-barrage-grab</code></td>
+            <td><span class="badge badge-green">✓ 可用</span></td>
+            <td>需要直播间 room_id</td>
+          </tr>
+          <tr>
+            <td>Cookie 认证</td>
+            <td>抓包获取 ttwid / __ac_nonce</td>
+            <td><span class="badge badge-green">✓ 推荐</span></td>
+            <td>提升稳定性和反检测</td>
+          </tr>
+          <tr>
+            <td>浏览器自动化</td>
+            <td>DrissionPage / Playwright</td>
+            <td><span class="badge badge-green">✓ 备用</span></td>
+            <td>自动维护 Cookie</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="code-block">
+      <div class="code-header">
+        <div class="code-dots"><span></span><span></span><span></span></div>
+        <span class="code-lang">Python · 抖音 WebSocket 连接示意</span>
+      </div>
+      <pre><code><span class="kw">import</span> asyncio, websockets, httpx
+
+<span class="kw">async def</span> <span class="fn">connect_douyin</span>(room_id: <span class="dec">str</span>, cookies: <span class="dec">dict</span>):
+    ws_url = (
+        <span class="str">f"wss://webcast5-ws-web-hl.douyin.com/webcast/im/push/v2/"</span>
+        <span class="str">f"?room_id={room_id}"</span>
+    )
+    <span class="kw">async with</span> websockets.<span class="fn">connect</span>(ws_url, extra_headers=cookies) <span class="kw">as</span> ws:
+        <span class="kw">async for</span> message <span class="kw">in</span> ws:
+            <span class="cm"># 解析 Protobuf 消息</span>
+            <span class="fn">parse_message</span>(message)</code></pre>
+    </div>
+
+    <h3>弹幕消息类型</h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>类型</th><th>说明</th><th>是否采集</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Chat（弹幕）</td><td>用户发送的文字消息</td><td><span class="badge badge-green">✓ 核心</span></td></tr>
+          <tr><td>Gift（礼物）</td><td>打赏事件</td><td><span class="badge badge-green">✓ 可选</span></td></tr>
+          <tr><td>Like（点赞）</td><td>点赞事件</td><td><span class="badge badge-gray">○ 统计用</span></td></tr>
+          <tr><td>Enter（进场）</td><td>用户进入直播间</td><td><span class="badge badge-gray">○ 统计用</span></td></tr>
+          <tr><td>Subscribe（关注）</td><td>新关注事件</td><td><span class="badge badge-gray">○ 可选</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ─── 3. AI Processing ──────────────────────── -->
+  <section id="ai">
+    <div class="section-header">
+      <div class="section-num">3</div>
+      <h2>AI 处理层</h2>
+    </div>
+
+    <h3>实时批次摘要（Claude API）</h3>
+    <p style="color:var(--text-muted);font-size:14px;margin-bottom:16px;">每 5 分钟将最新弹幕批次发送给 AI，生成阶段性摘要与情绪分析。</p>
+
+    <div class="code-block">
+      <div class="code-header">
+        <div class="code-dots"><span></span><span></span><span></span></div>
+        <span class="code-lang">Python · 批次摘要</span>
+      </div>
+      <pre><code><span class="kw">import</span> anthropic
+
+client = anthropic.<span class="fn">Anthropic</span>()
+
+<span class="kw">def</span> <span class="fn">summarize_batch</span>(messages: <span class="dec">list[str]</span>, interval_minutes: <span class="dec">int</span>) -> <span class="dec">str</span>:
+    prompt = <span class="str">f"""以下是一场直播间过去 {interval_minutes} 分钟的弹幕内容：
+
+{chr(10).join(messages)}
+
+请总结这段时间内：
+1. 观众主要在讨论什么话题
+2. 情绪倾向（正面/负面/中性）
+3. 出现频率最高的关键词（Top 10）
+4. 是否有异常互动或重要事件"""</span>
+
+    response = client.messages.<span class="fn">create</span>(
+        model=<span class="str">"claude-opus-4-6"</span>,
+        max_tokens=<span class="num">1024</span>,
+        messages=[{<span class="str">"role"</span>: <span class="str">"user"</span>, <span class="str">"content"</span>: prompt}]
+    )
+    <span class="kw">return</span> response.content[<span class="num">0</span>].text</code></pre>
+    </div>
+
+    <h3>RAG 问答系统</h3>
+
+    <div class="code-block">
+      <div class="code-header">
+        <div class="code-dots"><span></span><span></span><span></span></div>
+        <span class="code-lang">Python · RAG 问答</span>
+      </div>
+      <pre><code><span class="kw">import</span> chromadb
+<span class="kw">from</span> anthropic <span class="kw">import</span> <span class="dec">Anthropic</span>
+
+<span class="kw">def</span> <span class="fn">query_live_content</span>(question: <span class="dec">str</span>, session_id: <span class="dec">str</span>) -> <span class="dec">str</span>:
+    <span class="cm"># 1. 向量检索相关片段</span>
+    results = chroma_collection.<span class="fn">query</span>(
+        query_texts=[question],
+        n_results=<span class="num">5</span>,
+        where={<span class="str">"session_id"</span>: session_id}
+    )
+    context = <span class="str">"\n"</span>.<span class="fn">join</span>(results[<span class="str">'documents'</span>][<span class="num">0</span>])
+
+    <span class="cm"># 2. 使用 Claude 生成答案</span>
+    client = <span class="fn">Anthropic</span>()
+    response = client.messages.<span class="fn">create</span>(
+        model=<span class="str">"claude-opus-4-6"</span>,
+        max_tokens=<span class="num">512</span>,
+        system=<span class="str">"你是一名直播间内容分析助手，请基于提供的直播弹幕内容回答问题。"</span>,
+        messages=[{
+            <span class="str">"role"</span>: <span class="str">"user"</span>,
+            <span class="str">"content"</span>: <span class="str">f"相关直播内容：\n{context}\n\n问题：{question}"</span>
+        }]
+    )
+    <span class="kw">return</span> response.content[<span class="num">0</span>].text</code></pre>
+    </div>
+  </section>
+
+  <!-- ─── 4. Storage ────────────────────────────── -->
+  <section id="storage">
+    <div class="section-header">
+      <div class="section-num">4</div>
+      <h2>数据库设计</h2>
+    </div>
+    <div class="code-block">
+      <div class="code-header">
+        <div class="code-dots"><span></span><span></span><span></span></div>
+        <span class="code-lang">SQL · Schema 设计</span>
+      </div>
+      <pre><code class="sql-block"><span class="sql-cm">-- 直播会话表</span>
+<span class="sql-kw">CREATE TABLE</span> sessions (
+    id          <span class="sql-type">TEXT</span> <span class="sql-kw">PRIMARY KEY</span>,
+    platform    <span class="sql-type">TEXT NOT NULL</span>,       <span class="sql-cm">-- 'tiktok' | 'douyin'</span>
+    streamer_id <span class="sql-type">TEXT NOT NULL</span>,
+    room_id     <span class="sql-type">TEXT</span>,
+    title       <span class="sql-type">TEXT</span>,
+    started_at  <span class="sql-type">DATETIME</span>,
+    ended_at    <span class="sql-type">DATETIME</span>,
+    status      <span class="sql-type">TEXT</span> <span class="sql-kw">DEFAULT</span> <span class="sql-str">'live'</span>   <span class="sql-cm">-- 'live' | 'ended'</span>
+);
+
+<span class="sql-cm">-- 弹幕消息表</span>
+<span class="sql-kw">CREATE TABLE</span> messages (
+    id          <span class="sql-type">INTEGER PRIMARY KEY AUTOINCREMENT</span>,
+    session_id  <span class="sql-type">TEXT NOT NULL</span>,
+    msg_type    <span class="sql-type">TEXT NOT NULL</span>,       <span class="sql-cm">-- 'chat' | 'gift' | 'like'</span>
+    user_id     <span class="sql-type">TEXT</span>,
+    username    <span class="sql-type">TEXT</span>,
+    content     <span class="sql-type">TEXT</span>,
+    timestamp   <span class="sql-type">DATETIME</span> <span class="sql-kw">DEFAULT</span> CURRENT_TIMESTAMP,
+    <span class="sql-kw">FOREIGN KEY</span> (session_id) <span class="sql-kw">REFERENCES</span> sessions(id)
+);
+
+<span class="sql-cm">-- AI 摘要表</span>
+<span class="sql-kw">CREATE TABLE</span> summaries (
+    id          <span class="sql-type">INTEGER PRIMARY KEY AUTOINCREMENT</span>,
+    session_id  <span class="sql-type">TEXT NOT NULL</span>,
+    interval_no <span class="sql-type">INTEGER</span>,
+    started_at  <span class="sql-type">DATETIME</span>,
+    ended_at    <span class="sql-type">DATETIME</span>,
+    summary     <span class="sql-type">TEXT</span>,
+    keywords    <span class="sql-type">TEXT</span>,               <span class="sql-cm">-- JSON 格式</span>
+    sentiment   <span class="sql-type">TEXT</span>                <span class="sql-cm">-- 'positive' | 'negative' | 'neutral'</span>
+);
+
+<span class="sql-cm">-- 最终报告表</span>
+<span class="sql-kw">CREATE TABLE</span> reports (
+    id          <span class="sql-type">INTEGER PRIMARY KEY AUTOINCREMENT</span>,
+    session_id  <span class="sql-type">TEXT UNIQUE NOT NULL</span>,
+    markdown    <span class="sql-type">TEXT</span>,               <span class="sql-cm">-- 完整 Markdown 报告</span>
+    created_at  <span class="sql-type">DATETIME</span> <span class="sql-kw">DEFAULT</span> CURRENT_TIMESTAMP
+);</code></pre>
+    </div>
+  </section>
+
+  <!-- ─── 5. Architecture ───────────────────────── -->
+  <section id="architecture">
+    <div class="section-header">
+      <div class="section-num">5</div>
+      <h2>整体系统架构</h2>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      <div class="arch-layer">
+        <div class="arch-layer-title">数据采集层</div>
+        <div class="arch-row">
+          <div class="arch-box accent">TikTok WebSocket<br><small>TikTokLive</small></div>
+          <div class="arch-box cyan">抖音 WebSocket<br><small>dy-barrage-grab</small></div>
+        </div>
+      </div>
+      <div class="arch-arrow">↓</div>
+      <div class="arch-layer">
+        <div class="arch-layer-title">消息处理层</div>
+        <div class="arch-row">
+          <div class="arch-box">Protobuf 解析</div>
+          <div class="arch-box">消息分类</div>
+          <div class="arch-box">去重过滤</div>
+          <div class="arch-box">异步队列缓冲</div>
+        </div>
+      </div>
+      <div class="arch-arrow">↓</div>
+      <div class="arch-layer">
+        <div class="arch-layer-title">核心业务层</div>
+        <div class="arch-row">
+          <div class="arch-box accent">FastAPI 服务<br><small>Python asyncio</small></div>
+          <div class="arch-box">SQLite / PostgreSQL<br><small>持久化存储</small></div>
+        </div>
+      </div>
+      <div class="arch-arrow">↓</div>
+      <div class="arch-layer">
+        <div class="arch-layer-title">AI 处理层</div>
+        <div class="arch-row">
+          <div class="arch-box accent">实时批次摘要<br><small>Claude API</small></div>
+          <div class="arch-box cyan">向量化索引<br><small>ChromaDB + Embedding</small></div>
+          <div class="arch-box orange">全场报告生成<br><small>Markdown 输出</small></div>
+        </div>
+      </div>
+      <div class="arch-arrow">↓</div>
+      <div class="arch-layer">
+        <div class="arch-layer-title">输出层</div>
+        <div class="arch-row">
+          <div class="arch-box green">Markdown 文档报告</div>
+          <div class="arch-box green">实时弹幕看板</div>
+          <div class="arch-box green">AI 问答 Chat UI</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── 6. Stack ──────────────────────────────── -->
+  <section id="stack">
+    <div class="section-header">
+      <div class="section-num">6</div>
+      <h2>推荐技术栈</h2>
+    </div>
+    <div class="stack-grid">
+      <div class="stack-item">
+        <div class="stack-layer">后端语言</div>
+        <div class="stack-name">Python 3.11+</div>
+        <div class="stack-reason">生态最丰富，asyncio 并发</div>
+      </div>
+      <div class="stack-item">
+        <div class="stack-layer">Web 框架</div>
+        <div class="stack-name">FastAPI</div>
+        <div class="stack-reason">异步高性能，自带 OpenAPI</div>
+      </div>
+      <div class="stack-item">
+        <div class="stack-layer">TikTok 采集</div>
+        <div class="stack-name">TikTokLive</div>
+        <div class="stack-reason">成熟开源方案</div>
+      </div>
+      <div class="stack-item">
+        <div class="stack-layer">抖音采集</div>
+        <div class="stack-name">dy-barrage-grab</div>
+        <div class="stack-reason">支持 Protobuf 解析</div>
+      </div>
+      <div class="stack-item">
+        <div class="stack-layer">消息队列</div>
+        <div class="stack-name">Redis Streams</div>
+        <div class="stack-reason">缓冲高并发弹幕</div>
+      </div>
+      <div class="stack-item">
+        <div class="stack-layer">数据库</div>
+        <div class="stack-name">SQLite / PostgreSQL</div>
+        <div class="stack-reason">开发简单，生产可扩展</div>
+      </div>
+      <div class="stack-item">
+        <div class="stack-layer">向量数据库</div>
+        <div class="stack-name">ChromaDB</div>
+        <div class="stack-reason">轻量，纯 Python，免运维</div>
+      </div>
+      <div class="stack-item">
+        <div class="stack-layer">AI 模型</div>
+        <div class="stack-name">Claude claude-opus-4-6</div>
+        <div class="stack-reason">长上下文，中英文优秀</div>
+      </div>
+      <div class="stack-item">
+        <div class="stack-layer">Embedding</div>
+        <div class="stack-name">Voyage AI voyage-3</div>
+        <div class="stack-reason">性价比高，中文支持好</div>
+      </div>
+      <div class="stack-item">
+        <div class="stack-layer">前端</div>
+        <div class="stack-name">Next.js + Tailwind</div>
+        <div class="stack-reason">SSE 实时推送，现代 UI</div>
+      </div>
+      <div class="stack-item">
+        <div class="stack-layer">部署</div>
+        <div class="stack-name">Docker Compose</div>
+        <div class="stack-reason">一键部署所有服务</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── 7. Challenges ──────────────────────────── -->
+  <section id="challenges">
+    <div class="section-header">
+      <div class="section-num">7</div>
+      <h2>核心挑战与应对方案</h2>
+    </div>
+    <div class="challenge-grid">
+      <div class="challenge-card">
+        <div class="challenge-title">
+          <span class="challenge-icon">🛡️</span>
+          反爬与封禁
+        </div>
+        <div class="risk-item">
+          <span class="risk-label">IP 被封</span>
+          <span class="risk-solution">使用住宅代理池轮换</span>
+        </div>
+        <div class="risk-item">
+          <span class="risk-label">签名算法更新</span>
+          <span class="risk-solution">监控开源社区，设置自动告警</span>
+        </div>
+        <div class="risk-item">
+          <span class="risk-label">Cookie 失效</span>
+          <span class="risk-solution">定时刷新，多账号备份</span>
+        </div>
+        <div class="risk-item">
+          <span class="risk-label">WebSocket 断连</span>
+          <span class="risk-solution">自动重连，指数退避策略</span>
+        </div>
+      </div>
+      <div class="challenge-card">
+        <div class="challenge-title">
+          <span class="challenge-icon">⚡</span>
+          高并发弹幕
+        </div>
+        <div class="risk-item">
+          <span class="risk-label">消息洪峰</span>
+          <span class="risk-solution">asyncio.Queue 或 Redis Streams 缓冲</span>
+        </div>
+        <div class="risk-item">
+          <span class="risk-label">写入压力</span>
+          <span class="risk-solution">每 500ms 批量 INSERT</span>
+        </div>
+        <div class="risk-item">
+          <span class="risk-label">重复消息</span>
+          <span class="risk-solution">基于消息 ID 的 LRU 缓存去重</span>
+        </div>
+      </div>
+      <div class="challenge-card">
+        <div class="challenge-title">
+          <span class="challenge-icon">💰</span>
+          AI 成本控制
+        </div>
+        <div class="risk-item">
+          <span class="risk-label">API 调用频率</span>
+          <span class="risk-solution">每5分钟批量处理，减少80%调用</span>
+        </div>
+        <div class="risk-item">
+          <span class="risk-label">Token 消耗</span>
+          <span class="risk-solution">弹幕去重+过滤，节省30-50%</span>
+        </div>
+        <div class="risk-item">
+          <span class="risk-label">复杂任务</span>
+          <span class="risk-solution">Haiku 初筛，Opus 处理精细任务</span>
+        </div>
+        <div class="risk-item">
+          <span class="risk-label">向量化成本</span>
+          <span class="risk-solution">本地 Embedding 模型，完全免费</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── 8. Milestones ──────────────────────────── -->
+  <section id="milestones">
+    <div class="section-header">
+      <div class="section-num">8</div>
+      <h2>开发里程碑</h2>
+    </div>
+    <div class="milestones">
+      <div class="milestone">
+        <div class="milestone-phase">
+          <span class="phase-title">阶段 1：基础采集模块</span>
+          <span class="phase-weeks">1–2 周</span>
+        </div>
+        <ul class="milestone-tasks">
+          <li>TikTok 弹幕实时采集模块</li>
+          <li>抖音弹幕实时采集模块</li>
+          <li>Protobuf 消息解析与分类</li>
+          <li>SQLite 数据持久化</li>
+        </ul>
+      </div>
+      <div class="milestone">
+        <div class="milestone-phase">
+          <span class="phase-title">阶段 2：AI 摘要与报告生成</span>
+          <span class="phase-weeks">2–3 周</span>
+        </div>
+        <ul class="milestone-tasks">
+          <li>Claude API 集成</li>
+          <li>实时分批摘要逻辑</li>
+          <li>全场 Markdown 报告自动生成</li>
+          <li>情绪分析与关键词提取</li>
+        </ul>
+      </div>
+      <div class="milestone">
+        <div class="milestone-phase">
+          <span class="phase-title">阶段 3：RAG 问答系统</span>
+          <span class="phase-weeks">1–2 周</span>
+        </div>
+        <ul class="milestone-tasks">
+          <li>ChromaDB 向量数据库集成</li>
+          <li>直播内容向量化索引</li>
+          <li>自然语言检索接口</li>
+          <li>问答 API 端点开发</li>
+        </ul>
+      </div>
+      <div class="milestone">
+        <div class="milestone-phase">
+          <span class="phase-title">阶段 4：前端界面</span>
+          <span class="phase-weeks">1–2 周</span>
+        </div>
+        <ul class="milestone-tasks">
+          <li>实时弹幕监控看板</li>
+          <li>Markdown 报告查看器</li>
+          <li>AI 问答 Chat UI</li>
+          <li>直播会话管理界面</li>
+        </ul>
+      </div>
+      <div class="milestone">
+        <div class="milestone-phase">
+          <span class="phase-title">阶段 5：部署与优化</span>
+          <span class="phase-weeks">1 周</span>
+        </div>
+        <ul class="milestone-tasks">
+          <li>Docker Compose 容器化</li>
+          <li>监控与异常告警</li>
+          <li>性能压测与优化</li>
+          <li>文档完善</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── 9. Compliance ──────────────────────────── -->
+  <section id="compliance">
+    <div class="section-header">
+      <div class="section-num">9</div>
+      <h2>合规与风险声明</h2>
+    </div>
+    <div class="warning-box">
+      <h4>⚠️ 重要提示</h4>
+      <ol>
+        <li><strong>平台服务条款</strong>：TikTok 和抖音的服务条款均禁止未授权数据采集，使用本工具需自行评估法律风险。</li>
+        <li><strong>数据隐私</strong>：弹幕内容涉及用户个人信息，存储和使用需符合 GDPR、中国个人信息保护法等隐私法规。</li>
+        <li><strong>商业使用</strong>：如用于商业目的，建议通过官方合作渠道获取数据授权。</li>
+        <li><strong>仅供学习研究</strong>：本方案旨在技术探索，推荐用于个人学习、学术研究等非商业场景。</li>
+      </ol>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <p>技术可行性方案 v1.0 &nbsp;|&nbsp; 生成时间：2026-03-02 &nbsp;|&nbsp; Powered by <strong>Claude claude-opus-4-6</strong></p>
+</footer>
+
+</body>
+</html>

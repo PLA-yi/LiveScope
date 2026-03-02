@@ -1,0 +1,24 @@
+# 弹幕采集
+TikTokLive>=6.0.0
+websockets>=12.0
+aiohttp>=3.9.0
+
+# 数据库
+aiosqlite>=0.20.0
+sqlalchemy[asyncio]>=2.0.0
+
+# Protobuf（抖音消息解析）
+protobuf>=4.25.0
+
+# 无头浏览器（抖音自动采集）
+playwright>=1.40.0
+
+# Web 看板
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+
+# 工具
+python-dotenv>=1.0.0
+rich>=13.0.0
+httpx>=0.27.0
+click>=8.1.0

@@ -1,0 +1,85 @@
+syntax = "proto3";
+
+// 抖音直播 WebSocket 推送帧
+message PushFrame {
+  uint64 seqId         = 1;
+  uint64 logId         = 2;
+  uint64 service       = 3;
+  uint64 method        = 4;
+  repeated HeadersList headers = 5;
+  string payloadEncoding = 10;
+  string payloadType   = 12;
+  bytes  payload       = 9;
+}
+
+message HeadersList {
+  string key   = 1;
+  string value = 2;
+}
+
+// 响应体（payload 解码后的结构）
+message Response {
+  repeated Message messages = 1;
+  bytes           cursor    = 2;
+  uint64          fetchInterval = 3;
+  uint64          now       = 4;
+  string          internalExt = 5;
+  uint32          fetchType = 6;
+  map<string, string> routeParams = 7;
+  uint64          heartbeatDuration = 8;
+  bool            needAck  = 9;
+  string          pushServer = 10;
+  string          liveCursor = 11;
+  bool            historyNoMore = 12;
+}
+
+message Message {
+  string method  = 1;
+  bytes  payload = 2;
+  uint64 msgId   = 3;
+  uint64 msgType = 4;
+  uint64 offset  = 5;
+  bool   needWrapped = 6;
+  bool   isFiltered  = 7;
+}
+
+// 弹幕消息
+message ChatMessage {
+  User    user    = 2;
+  string  content = 3;
+  uint64  msgId   = 5;
+}
+
+// 礼物消息
+message GiftMessage {
+  User   user       = 2;
+  uint64 giftId     = 5;
+  uint64 repeatCount = 11;
+  string giftName   = 23;
+}
+
+// 成员进场消息
+message MemberMessage {
+  User   user   = 2;
+  uint64 msgId  = 5;
+}
+
+// 点赞消息
+message LikeMessage {
+  User   user   = 2;
+  uint64 count  = 3;
+  uint64 msgId  = 5;
+}
+
+// 关注消息
+message SocialMessage {
+  User   user   = 2;
+  uint64 msgId  = 5;
+}
+
+// 用户信息（简化版）
+message User {
+  uint64 id       = 1;
+  string nickName = 3;
+  string secUid   = 4;
+}
