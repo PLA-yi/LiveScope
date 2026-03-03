@@ -574,6 +574,21 @@ main{display:flex;flex-direction:column;overflow:hidden;min-height:0}
 ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08);border-radius:4px}
 ::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.14)}
 
+/* ── 导出按钮 ── */
+.export-btn{
+  display:inline-flex;align-items:center;gap:5px;
+  padding:5px 12px;border-radius:100px;font-size:12px;font-weight:500;cursor:pointer;
+  background:rgba(255,255,255,.05);border:1px solid var(--bd);color:var(--mu2);
+  transition:all .18s;white-space:nowrap;
+}
+.export-btn:hover{
+  background:rgba(124,106,247,.12);border-color:rgba(124,106,247,.35);color:var(--ac2);
+  transform:translateY(-1px);box-shadow:0 3px 10px rgba(124,106,247,.15);
+}
+.export-btn:active{transform:translateY(0);box-shadow:none}
+.export-btn-sm{padding:3px 8px;font-size:11px}
+.export-btn-sm:hover{transform:none;box-shadow:none}
+
 /* ── textarea in modal ── */
 textarea{
   background:rgba(255,255,255,.05);border:1px solid var(--bd);color:var(--tx);
@@ -1174,7 +1189,15 @@ function renderFrame(s){
           <div id="top-users"></div>
         </div>
         <div class="right-bottom">
-          <div class="panel-hdr"><span class="panel-title">弹幕活跃度</span></div>
+          <div class="panel-hdr">
+            <span class="panel-title">弹幕活跃度</span>
+            <button class="export-btn export-btn-sm" onclick="exportChartPng()" title="导出图表为 PNG 图片">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              PNG
+            </button>
+          </div>
           <div id="chart-wrap"><canvas id="tc"></canvas></div>
         </div>
       </div>
@@ -1191,7 +1214,24 @@ function renderFrame(s){
           <button class="ttab"     onclick="dtSwitchType('subscribe',this)">关注</button>
         </div>
         <input class="data-search" id="dt-search" placeholder="搜索用户名 / 内容…" oninput="dtSearch(this.value)"/>
-        <span id="dt-total-info" style="font-size:12px;color:var(--mu);margin-left:auto"></span>
+        <div style="display:flex;gap:6px;margin-left:auto;align-items:center">
+          <span id="dt-total-info" style="font-size:12px;color:var(--mu)"></span>
+          <button class="export-btn" onclick="exportMarkdown()" title="导出当前筛选条件下的全量数据为 Markdown 文件">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/>
+            </svg>
+            导出 Markdown
+          </button>
+          <button class="export-btn" onclick="exportSvg()" title="将弹幕活跃度图表导出为 SVG 矢量文件">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2"/><polyline points="3 9 9 9 9 3"/>
+              <polyline points="21 15 15 15 15 21"/><line x1="9" y1="15" x2="3" y2="21"/>
+              <line x1="21" y1="3" x2="15" y2="9"/>
+            </svg>
+            导出 SVG
+          </button>
+        </div>
       </div>
       <div class="dt-wrap" id="dt-wrap">
         <table class="dt">
@@ -1515,6 +1555,190 @@ function dtSearch(kw){
 function dtPage(dir){
   dtPage0=Math.max(0,dtPage0+dir);
   loadDataTable();
+}
+
+// ── 导出工具 ──────────────────────────────────────────────────────────────────
+
+/** 触发浏览器下载，content 为字符串或 Blob */
+function _download(filename, content, mime='text/plain'){
+  const blob = content instanceof Blob ? content : new Blob([content], {type: mime});
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 2000);
+}
+
+/** 导出当前数据视图（全量，遵循当前类型过滤）为 Markdown */
+async function exportMarkdown(){
+  if(!curSession){ alert('请先选择会话'); return; }
+  const btn = document.querySelector('.export-btn[onclick="exportMarkdown()"]');
+  const origText = btn.innerHTML;
+  btn.textContent = '导出中…'; btn.disabled = true;
+
+  try{
+    // 拉全量（不分页，上限 20000 条）
+    const msgs = await api(
+      `/api/sessions/${curSession.id}/messages?type=${dtType}&limit=20000&offset=0`
+    );
+    const stats = await api(`/api/sessions/${curSession.id}/stats`);
+    const c = stats.counts || {};
+    const names = {chat:'弹幕',gift:'礼物',like:'点赞',enter:'进场',subscribe:'关注'};
+    const now  = new Date().toLocaleString('zh-CN',{hour12:false});
+    const platform = curSession.platform === 'tiktok' ? 'TikTok' : '抖音';
+    const typeName = dtType === 'all' ? '全部' : (names[dtType] || dtType);
+
+    // ── 标题 & 统计摘要 ──
+    let md = `# ${platform} · ${curSession.streamer_id} 直播数据报告\n\n`;
+    md += `> 导出时间：${now}  ·  会话 ID：\`${curSession.id}\`\n\n`;
+    md += `## 统计摘要\n\n`;
+    md += `| 指标 | 数量 |\n|------|------|\n`;
+    md += `| 总消息 | ${stats.total || 0} |\n`;
+    md += `| 弹幕 | ${c.chat || 0} |\n`;
+    md += `| 礼物 | ${c.gift || 0} |\n`;
+    md += `| 点赞 | ${c.like || 0} |\n`;
+    md += `| 进场 | ${c.enter || 0} |\n`;
+
+    // ── Top 用户 ──
+    if(stats.top_users?.length){
+      md += `\n## 弹幕 Top 用户\n\n| 排名 | 用户名 | 弹幕数 |\n|------|--------|--------|\n`;
+      stats.top_users.forEach((u,i)=>{
+        md += `| ${i+1} | ${u.username || '匿名'} | ${u.count} |\n`;
+      });
+    }
+
+    // ── 消息列表 ──
+    md += `\n## 消息列表（${typeName}，共 ${msgs.length} 条）\n\n`;
+    md += `| 时间 | 类型 | 用户名 | 内容 |\n|------|------|--------|------|\n`;
+
+    // 关键词过滤（与当前搜索框同步）
+    let rows = msgs;
+    if(dtSearchKw){
+      const kw = dtSearchKw.toLowerCase();
+      rows = msgs.filter(m =>
+        (m.username||'').toLowerCase().includes(kw) ||
+        (m.content||'').toLowerCase().includes(kw)
+      );
+    }
+
+    rows.forEach(m=>{
+      // 转义 Markdown 表格里的管道符
+      const clean = s => String(s||'').replace(/\|/g,'｜').replace(/\n/g,' ');
+      md += `| ${clean(m.timestamp)} | ${clean(names[m.msg_type]||m.msg_type)} | ${clean(m.username||'匿名')} | ${clean(m.content)} |\n`;
+    });
+
+    const safeName = (curSession.streamer_id||'export').replace(/[^\w\u4e00-\u9fa5-]/g,'_');
+    _download(`${safeName}_${dtType}.md`, md, 'text/markdown;charset=utf-8');
+  } finally {
+    btn.innerHTML = origText; btn.disabled = false;
+  }
+}
+
+/** 将弹幕活跃度时间线导出为自绘 SVG 矢量文件 */
+async function exportSvg(){
+  if(!curSession){ alert('请先选择会话'); return; }
+
+  const stats = await api(`/api/sessions/${curSession.id}/stats`);
+  const tl    = stats.timeline || [];
+
+  if(!tl.length){ alert('暂无时间线数据'); return; }
+
+  // ── 尺寸 & 布局 ──
+  const W = 960, H = 360;
+  const PAD = {top:32, right:24, bottom:52, left:52};
+  const chartW = W - PAD.left - PAD.right;
+  const chartH = H - PAD.top  - PAD.bottom;
+
+  const labels = tl.map(t=>t.minute);
+  const values = tl.map(t=>t.count);
+  const maxVal = Math.max(...values, 1);
+  const barW   = Math.max(2, Math.floor(chartW / labels.length) - 2);
+
+  // ── 颜色 & 文字 ──
+  const BG      = '#080b14';
+  const BAR_F   = 'rgba(124,106,247,.45)';
+  const BAR_S   = 'rgba(157,142,249,.8)';
+  const AXIS_C  = '#94a3b8';
+  const GRID_C  = 'rgba(255,255,255,.06)';
+  const TEXT_C  = '#e2e8f0';
+  const platform = curSession.platform === 'tiktok' ? 'TikTok' : '抖音';
+  const title    = `${platform} · ${curSession.streamer_id} — 弹幕活跃度`;
+
+  // ── Y 轴刻度 ──
+  const yTickCount = 5;
+  const yTicks = Array.from({length: yTickCount+1}, (_,i) => Math.round(maxVal * i / yTickCount));
+
+  // ── 生成 SVG 元素 ──
+  const bars = labels.map((lbl, i) => {
+    const x = PAD.left + i * (chartW / labels.length) + (chartW / labels.length - barW) / 2;
+    const bh = Math.max(1, Math.round(values[i] / maxVal * chartH));
+    const y  = PAD.top + chartH - bh;
+    return `<rect x="${x.toFixed(1)}" y="${y}" width="${barW}" height="${bh}"
+      fill="${BAR_F}" stroke="${BAR_S}" stroke-width="0.8" rx="3"/>`;
+  }).join('\n  ');
+
+  // X 轴标签（每隔若干条显示一个）
+  const step = Math.max(1, Math.ceil(labels.length / 10));
+  const xLabels = labels.map((lbl, i) => {
+    if(i % step !== 0) return '';
+    const cx = PAD.left + (i + 0.5) * (chartW / labels.length);
+    return `<text x="${cx.toFixed(1)}" y="${PAD.top + chartH + 18}" text-anchor="middle"
+      font-size="10" fill="${AXIS_C}">${lbl}</text>`;
+  }).join('\n  ');
+
+  // Y 轴网格线 + 刻度
+  const gridLines = yTicks.map(v => {
+    const y = PAD.top + chartH - Math.round(v / maxVal * chartH);
+    const fmt = v >= 10000 ? (v/10000).toFixed(1)+'w' : v >= 1000 ? (v/1000).toFixed(1)+'k' : String(v);
+    return `<line x1="${PAD.left}" y1="${y}" x2="${PAD.left+chartW}" y2="${y}"
+        stroke="${GRID_C}" stroke-width="1"/>
+  <text x="${PAD.left-6}" y="${y+4}" text-anchor="end" font-size="10" fill="${AXIS_C}">${fmt}</text>`;
+  }).join('\n  ');
+
+  const now = new Date().toLocaleString('zh-CN',{hour12:false});
+
+  const svg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0d1020"/>
+      <stop offset="100%" stop-color="${BG}"/>
+    </linearGradient>
+  </defs>
+  <!-- 背景 -->
+  <rect width="${W}" height="${H}" fill="url(#bg)" rx="12"/>
+  <!-- 标题 -->
+  <text x="${W/2}" y="22" text-anchor="middle" font-size="13" font-weight="700"
+    fill="${TEXT_C}" font-family="-apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif">${title}</text>
+  <!-- 导出时间 -->
+  <text x="${W-PAD.right}" y="22" text-anchor="end" font-size="10" fill="${AXIS_C}"
+    font-family="-apple-system,BlinkMacSystemFont,sans-serif">${now}</text>
+  <!-- 网格 & Y轴刻度 -->
+  ${gridLines}
+  <!-- 柱状图 -->
+  ${bars}
+  <!-- X轴标签 -->
+  ${xLabels}
+  <!-- 轴线 -->
+  <line x1="${PAD.left}" y1="${PAD.top}" x2="${PAD.left}" y2="${PAD.top+chartH}"
+    stroke="${AXIS_C}" stroke-width="1" opacity="0.4"/>
+  <line x1="${PAD.left}" y1="${PAD.top+chartH}" x2="${PAD.left+chartW}" y2="${PAD.top+chartH}"
+    stroke="${AXIS_C}" stroke-width="1" opacity="0.4"/>
+</svg>`;
+
+  const safeName = (curSession.streamer_id||'chart').replace(/[^\w\u4e00-\u9fa5-]/g,'_');
+  _download(`${safeName}_活跃度.svg`, svg, 'image/svg+xml;charset=utf-8');
+}
+
+/** 将 Chart.js Canvas 导出为 PNG */
+function exportChartPng(){
+  const canvas = $('tc');
+  if(!canvas){ alert('图表尚未生成'); return; }
+  const safeName = (curSession?.streamer_id||'chart').replace(/[^\w\u4e00-\u9fa5-]/g,'_');
+  canvas.toBlob(blob=>{
+    _download(`${safeName}_活跃度.png`, blob, 'image/png');
+  });
 }
 
 // ── AI Chat ────────────────────────────────────────────────────────────────────
