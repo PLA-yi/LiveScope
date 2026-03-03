@@ -170,7 +170,6 @@ async def collect_status() -> JSONResponse:
 async def start_collect(
     platform: str = Query(..., description="tiktok 或 douyin"),
     target:   str = Query(..., description="TikTok: @username；抖音: room_id 或 URL"),
-    ws_url:   str = Query(default="", description="（抖音）直接指定完整 wss:// 地址"),
 ) -> JSONResponse:
     platform = platform.lower()
     target   = target.strip()
@@ -225,7 +224,7 @@ async def start_collect(
         collector = DouyinCollector(
             session=session, queue=write_q,
             room_id=room_id, cookie=douyin_cookie,
-            web_rid=web_rid, ws_url=ws_url,
+            web_rid=web_rid,
         )
 
     task = asyncio.create_task(collector.start(), name=f"collect-{session_id}")

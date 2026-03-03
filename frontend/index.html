@@ -352,9 +352,6 @@ main{display:flex;flex-direction:column;overflow:hidden;min-height:0}
         <option value="douyin">🎵 抖音</option>
       </select>
       <input id="f-target" type="text" placeholder="@username"/>
-      <div id="f-wsurl-row" style="display:none">
-        <input id="f-wsurl" type="text" placeholder="wss://（可选，直接指定 WebSocket 地址）"/>
-      </div>
       <div class="form-err" id="form-err"></div>
       <button id="start-btn" onclick="startCollect()">▶ 开始采集</button>
     </div>
@@ -650,7 +647,6 @@ async function flushTranslateQueue(){
 async function startCollect(){
   const platform = $('f-platform').value;
   const target   = $('f-target').value.trim();
-  const wsurl    = ($('f-wsurl') && $('f-wsurl').value.trim()) || '';
   const errEl    = $('form-err');
   errEl.textContent = '';
   if(!target){ errEl.textContent='请输入用户名或 room_id'; return; }
@@ -1558,7 +1554,6 @@ function updateTargetPlaceholder(){
   $('f-target').placeholder = p === 'tiktok'
     ? '@username'
     : '直播间数字 ID 或直播间 URL';
-  $('f-wsurl-row').style.display = p === 'douyin' ? 'block' : 'none';
 }
 updateTargetPlaceholder();
 (async()=>{

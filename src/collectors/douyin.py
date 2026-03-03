@@ -155,13 +155,11 @@ class DouyinCollector(BaseCollector):
         room_id:  str,
         cookie:   str = "",
         web_rid:  str = "",
-        ws_url:   str = "",
     ) -> None:
         super().__init__(session, queue)
         self._web_rid    = web_rid or room_id
         self._room_id    = room_id
         self._cookie     = cookie
-        self._fixed_url  = ws_url
         self._ttwid: str = ""
         self._ws: websockets.WebSocketClientProtocol | None = None
 
@@ -236,10 +234,7 @@ class DouyinCollector(BaseCollector):
         await self._resolve_room_id()
 
         # 3. 构建 WSS URL
-        if self._fixed_url:
-            ws_url = self._fixed_url
-        else:
-            ws_url = self._build_ws_url()
+        ws_url = self._build_ws_url()
 
         # 4. Cookie：优先用用户提供的，否则用自动获取的 ttwid
         cookie_str = self._cookie or f"ttwid={self._ttwid}"
