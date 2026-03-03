@@ -855,7 +855,8 @@ async function selectSession(s){
   curSession=s; curType='chat'; lastMsgId=0; autoScroll=true;
   translateOn=false; translateQueue=[];
   curView='dashboard'; dtPage0=0; dtType='all'; dtSearchKw='';
-  aiHistory=[]; aiStreaming=false;
+  aiStreaming=false;
+  aiHistory = loadAiHistory();   // 从 localStorage 恢复该会话的对话历史
   clearInterval(pollTimer); stopTranslateTimer();
   if(chart){ chart.destroy(); chart=null; }
   renderFrame(s);
@@ -1258,6 +1259,22 @@ let aiProviders  = {};
 let aiHistory    = [];   // [{role:'user'|'assistant', content}]
 let aiStreaming   = false;
 
+// ── AI 对话历史持久化 ─────────────────────────────────────────────────────────
+function aiHistoryKey(){ return curSession ? `ai_hist_${curSession.id}` : null; }
+function loadAiHistory(){
+  const k = aiHistoryKey(); if(!k) return [];
+  try{ return JSON.parse(localStorage.getItem(k)||'[]'); } catch{ return []; }
+}
+function saveAiHistory(){
+  const k = aiHistoryKey(); if(!k) return;
+  // 只保留最近 60 条，防止 localStorage 超限
+  const trimmed = aiHistory.slice(-60);
+  localStorage.setItem(k, JSON.stringify(trimmed));
+}
+function clearAiHistory(){
+  const k = aiHistoryKey(); if(k) localStorage.removeItem(k);
+}
+
 async function initAiView(){
   if(!Object.keys(aiProviders).length){
     aiProviders = await api('/api/analyze/providers').catch(()=>({}));
@@ -1274,6 +1291,14 @@ async function initAiView(){
   const hint=$('ai-key-hint');
   if(hint) hint.textContent = s.analyze_api_key_set ? `✓ 已保存  ${s.analyze_api_key_masked}` : '';
   onAiProviderChange($('ai-provider')?.value||'deepseek', s.analyze_model);
+
+  // 恢复历史对话到界面
+  const msgs = $('ai-messages'); if(!msgs) return;
+  if(aiHistory.length){
+    msgs.innerHTML = '';
+    aiHistory.forEach(m => aiAppendMsg(m.role, m.content));
+    msgs.scrollTop = msgs.scrollHeight;
+  }
 }
 
 function onAiProviderChange(pid, savedModel=''){
@@ -1329,6 +1354,7 @@ function aiSendPreset(text){
 
 function aiClearChat(){
   aiHistory=[];
+  clearAiHistory();
   const msgs=$('ai-messages'); if(!msgs) return;
   msgs.innerHTML=`<div class="ai-welcome" id="ai-welcome">
     <div class="ai-welcome-icon">🤖</div>
@@ -1368,6 +1394,7 @@ async function aiSend(){
 
   ta.value=''; aiAutoResize(ta);
   aiHistory.push({role:'user',content:text});
+  saveAiHistory();
   aiAppendMsg('user',text);
 
   const sendBtn=$('ai-send-btn'); sendBtn.disabled=true;
@@ -1407,6 +1434,7 @@ async function aiSend(){
     }
     aiBubble.classList.remove('ai-streaming');
     aiHistory.push({role:'assistant',content:raw});
+    saveAiHistory();
   } catch(e){
     aiBubble.innerHTML=`<div class="ai-msg-error">⚠ ${esc(String(e))}</div>`;
     aiHistory.pop();
