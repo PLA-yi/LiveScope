@@ -6,7 +6,7 @@ LiveScope Web API  —  REST 接口 + 后台采集任务管理
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -20,6 +20,16 @@ from src.database.db import AsyncSessionLocal, BatchWriter, end_live_session, in
 from src.database.models import Message, MessageType, Platform, Session, SessionStatus
 
 logger = logging.getLogger(__name__)
+
+_CST = timezone(timedelta(hours=8))
+
+
+def _to_cst(dt: datetime | None) -> str:
+    """将数据库中的 UTC datetime 转为北京时间 HH:MM:SS 字符串。"""
+    if not dt:
+        return ""
+    return (dt.replace(tzinfo=timezone.utc).astimezone(_CST)).strftime("%H:%M:%S")
+
 
 app = FastAPI(title="LiveScope API", docs_url=None, redoc_url=None)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -99,7 +109,7 @@ async def get_stats(session_id: str) -> JSONResponse:
 
         timeline_r = await db.execute(
             select(
-                func.strftime("%H:%M", Message.timestamp).label("minute"),
+                func.strftime("%H:%M", func.datetime(Message.timestamp, "+8 hours")).label("minute"),
                 func.count().label("n"),
             )
             .where(Message.session_id == session_id, Message.msg_type == "chat")
@@ -141,7 +151,7 @@ async def get_messages(
         "username":  m.username,
         "content":   m.content,
         "extra":     m.extra,
-        "timestamp": str(m.timestamp)[11:19] if m.timestamp else "",
+        "timestamp": _to_cst(m.timestamp),
     } for m in rows]
     return JSONResponse(data)
 
@@ -462,13 +472,13 @@ async def _build_analysis_context(session_id: str) -> str | None:
             except Exception:
                 pass
             repeat = extra.get("repeat_count", 1)
-            lines.append(f"[{str(g.timestamp)[11:19]}] {g.username} 送出 {g.content} × {repeat}")
+            lines.append(f"[{_to_cst(g.timestamp)}] {g.username} 送出 {g.content} × {repeat}")
         lines.append("")
 
     if chats:
         lines.append(f"【弹幕内容（共采集 {counts.get('chat', 0)} 条，展示 {len(chats)} 条）】")
         for m in chats:
-            lines.append(f"[{str(m.timestamp)[11:19]}] {m.username}：{m.content}")
+            lines.append(f"[{_to_cst(m.timestamp)}] {m.username}：{m.content}")
 
     return "\n".join(lines)
 
