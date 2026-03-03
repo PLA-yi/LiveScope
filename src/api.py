@@ -173,6 +173,11 @@ async def start_collect(
     ws_url:   str = Query(default="", description="（抖音）直接指定完整 wss:// 地址"),
 ) -> JSONResponse:
     platform = platform.lower()
+    target   = target.strip()
+
+    # 拦截明显错误的输入（Cookie JSON / shell 命令等）
+    if target.startswith("[") or target.startswith("{") or len(target) > 200:
+        return JSONResponse({"error": "target 格式不正确，请输入主播 ID 或直播间 URL"}, status_code=400)
 
     if platform == "tiktok":
         unique_id = target if target.startswith("@") else f"@{target}"
