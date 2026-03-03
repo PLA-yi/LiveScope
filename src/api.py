@@ -130,7 +130,7 @@ async def get_stats(session_id: str) -> JSONResponse:
 async def get_messages(
     session_id: str,
     msg_type:   str           = Query("chat", alias="type"),
-    limit:      int           = Query(200, le=1000),
+    limit:      int           = Query(200, le=20000),
     offset:     int           = Query(0),
     since_id:   Optional[int] = Query(None),
 ) -> JSONResponse:
