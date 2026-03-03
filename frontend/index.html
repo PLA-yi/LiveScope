@@ -58,9 +58,16 @@ select{cursor:pointer;width:100%}
 .session-list-hd{padding:10px 14px 6px;font-size:11px;font-weight:600;
   color:var(--mu);text-transform:uppercase;letter-spacing:.6px;flex-shrink:0}
 #session-list{flex:1;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--bd) transparent}
-.sess-item{padding:9px 14px;cursor:pointer;border-left:3px solid transparent;transition:background .15s;position:relative}
+.sess-item{padding:9px 14px 9px 28px;cursor:pointer;border-left:3px solid transparent;transition:background .15s;position:relative}
 .sess-item:hover{background:var(--s2)}
 .sess-item.active{background:rgba(124,106,247,.1);border-left-color:var(--ac)}
+.sess-item.drag-over{border-top:2px solid var(--ac)}
+.sess-item.dragging{opacity:.4}
+.sess-drag-handle{position:absolute;left:8px;top:50%;transform:translateY(-50%);
+  color:var(--mu);opacity:0;cursor:grab;font-size:14px;line-height:1;user-select:none;
+  transition:opacity .15s}
+.sess-item:hover .sess-drag-handle{opacity:.5}
+.sess-drag-handle:hover{opacity:1 !important}
 .sess-actions{display:none;position:absolute;top:7px;right:6px;gap:3px;align-items:center}
 .sess-item:hover .sess-actions{display:flex}
 .sess-del,.sess-restart{background:none;border:none;cursor:pointer;font-size:13px;
@@ -70,7 +77,9 @@ select{cursor:pointer;width:100%}
 .sess-platform{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--mu);margin-bottom:2px}
 .pdot{width:6px;height:6px;border-radius:50%}
 .pdot.tiktok{background:#ff0050}.pdot.douyin{background:#00f2ea}
-.sess-name{font-weight:600;font-size:13px}
+.sess-name{font-weight:600;font-size:13px;cursor:text}
+.sess-name-edit{background:var(--bg);border:1px solid var(--ac);color:var(--tx);
+  border-radius:4px;padding:1px 5px;font-size:13px;font-weight:600;width:calc(100% - 8px);outline:none}
 .sess-meta{font-size:11px;color:var(--mu);margin-top:2px}
 .sess-status{display:inline-block;padding:1px 6px;border-radius:100px;font-size:10px;margin-top:3px}
 .ss-live{background:rgba(34,197,94,.12);color:var(--gn)}
@@ -678,31 +687,121 @@ async function stopCollect(sessionId){
   }
 }
 
+// ── localStorage 排序 & 命名 ──────────────────────────────────────────────────
+function getSessOrder(){ try{return JSON.parse(localStorage.getItem('ls_order')||'[]')}catch{return[]} }
+function saveSessOrder(ids){ localStorage.setItem('ls_order',JSON.stringify(ids)) }
+function getSessNames(){ try{return JSON.parse(localStorage.getItem('ls_names')||'{}')}catch{return{}} }
+function saveSessName(id,name){ const n=getSessNames(); if(name)n[id]=name; else delete n[id]; localStorage.setItem('ls_names',JSON.stringify(n)) }
+
+let _sessCache = {};   // id → session 对象
+let _dragSrcId  = null;
+let _wasDragging = false;
+
 // ── 会话列表 ──────────────────────────────────────────────────────────────────
 async function loadSessions(){
-  const sessions=await api('/api/sessions');
-  const el=$('session-list');
+  const sessions = await api('/api/sessions');
+  _sessCache = Object.fromEntries(sessions.map(s=>[s.id, s]));
+
+  const el = $('session-list');
   $('live-badge').classList.toggle('on', sessions.some(s=>s.status==='live'));
   if(!sessions.length){ el.innerHTML='<div class="msg-empty">暂无会话</div>'; return; }
-  el.innerHTML=sessions.map(s=>`
-    <div class="sess-item ${curSession?.id===s.id?'active':''}"
-         onclick='selectSession(${JSON.stringify(s).replace(/'/g,"&#39;")})'>
+
+  // 按 localStorage 排序，新会话插到最前
+  const order = getSessOrder();
+  const newIds = sessions.filter(s=>!order.includes(s.id)).map(s=>s.id);
+  if(newIds.length) saveSessOrder([...newIds, ...order]);
+  const finalOrder = [...newIds, ...order];
+  const sorted = [...sessions].sort((a,b)=>finalOrder.indexOf(a.id)-finalOrder.indexOf(b.id));
+
+  const names = getSessNames();
+  el.innerHTML = sorted.map(s=>`
+    <div class="sess-item ${curSession?.id===s.id?'active':''}" data-sid="${esc(s.id)}">
+      <span class="sess-drag-handle" title="拖动排序">⠿</span>
       <div class="sess-platform">
         <span class="pdot ${s.platform}"></span>
         ${s.platform==='tiktok'?'TikTok':'抖音'}
       </div>
-      <div class="sess-name">${esc(s.streamer_id)}</div>
+      <div class="sess-name" data-orig="${esc(s.streamer_id)}" title="双击重命名">
+        ${esc(names[s.id] || s.streamer_id)}
+      </div>
       <div class="sess-meta">${s.started_at||''}</div>
       <span class="sess-status ${s.status==='live'?'ss-live':'ss-ended'}">
         ${s.status==='live'?'● 采集中':'已结束'}
       </span>
       ${s.status!=='live'?`<div class="sess-actions">
-        <button class="sess-restart" title="重新采集"
-          onclick='event.stopPropagation();restartSession(${JSON.stringify(s).replace(/'/g,"&#39;")})'>▶</button>
-        <button class="sess-del" title="删除会话"
-          onclick='event.stopPropagation();deleteSession(${JSON.stringify(s.id).replace(/'/g,"&#39;")})'>✕</button>
+        <button class="sess-restart" title="重新采集">▶</button>
+        <button class="sess-del" title="删除会话">✕</button>
       </div>`:''}
     </div>`).join('');
+
+  // 绑定事件
+  el.querySelectorAll('.sess-item').forEach(item=>{
+    const sid = item.dataset.sid;
+
+    // 点击选中（拖拽结束后忽略）
+    item.addEventListener('click', e=>{
+      if(_wasDragging){ _wasDragging=false; return; }
+      if(e.target.closest('.sess-actions,.sess-drag-handle,.sess-name')) return;
+      selectSession(_sessCache[sid]);
+    });
+
+    // 拖拽
+    item.setAttribute('draggable','true');
+    item.addEventListener('dragstart', e=>{
+      _dragSrcId = sid; _wasDragging = false;
+      e.dataTransfer.effectAllowed = 'move';
+      setTimeout(()=>item.classList.add('dragging'), 0);
+    });
+    item.addEventListener('dragend', ()=>{
+      item.classList.remove('dragging');
+      el.querySelectorAll('.drag-over').forEach(x=>x.classList.remove('drag-over'));
+      setTimeout(()=>{ _dragSrcId=null; }, 50);
+    });
+    item.addEventListener('dragover', e=>{
+      e.preventDefault(); e.dataTransfer.dropEffect='move';
+      _wasDragging = true;
+      el.querySelectorAll('.drag-over').forEach(x=>x.classList.remove('drag-over'));
+      if(sid !== _dragSrcId) item.classList.add('drag-over');
+    });
+    item.addEventListener('drop', e=>{
+      e.preventDefault();
+      if(!_dragSrcId || _dragSrcId===sid) return;
+      const ids = [...el.querySelectorAll('.sess-item')].map(x=>x.dataset.sid);
+      const si = ids.indexOf(_dragSrcId), ti = ids.indexOf(sid);
+      ids.splice(si,1); ids.splice(ti,0,_dragSrcId);
+      saveSessOrder(ids);
+      loadSessions();
+    });
+
+    // 双击重命名
+    const nameEl = item.querySelector('.sess-name');
+    nameEl.addEventListener('click', e=>e.stopPropagation());
+    nameEl.addEventListener('dblclick', e=>{ e.stopPropagation(); startRename(nameEl, sid); });
+
+    // 操作按钮
+    item.querySelector('.sess-restart')?.addEventListener('click', e=>{ e.stopPropagation(); restartSession(_sessCache[sid]); });
+    item.querySelector('.sess-del')?.addEventListener('click', e=>{ e.stopPropagation(); deleteSession(sid); });
+  });
+}
+
+function startRename(nameEl, sid){
+  const input = document.createElement('input');
+  input.className = 'sess-name-edit';
+  input.value = getSessNames()[sid] || '';
+  input.placeholder = nameEl.dataset.orig || '';
+  nameEl.replaceWith(input);
+  input.focus(); input.select();
+  let done = false;
+  function save(){
+    if(done) return; done = true;
+    saveSessName(sid, input.value.trim());
+    loadSessions();
+  }
+  input.addEventListener('blur', save);
+  input.addEventListener('keydown', e=>{
+    if(e.key==='Enter'){ e.preventDefault(); save(); }
+    if(e.key==='Escape'){ done=true; loadSessions(); }
+  });
 }
 
 // ── 删除会话 ──────────────────────────────────────────────────────────────────
