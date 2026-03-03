@@ -355,6 +355,20 @@ class DouyinCollector(BaseCollector):
             logger.debug("[Douyin] 帧解析错误: %s", exc)
 
     def _dispatch(self, msg) -> None:
+        # 下播控制消息：status=3 表示直播已结束，停止重连
+        if msg.method == "WebcastControlMessage":
+            try:
+                ctrl = pb.ControlMessage()
+                ctrl.ParseFromString(msg.payload)
+                if ctrl.status == 3:
+                    logger.info("[Douyin] 收到下播信号 (ControlMessage status=3)，停止采集")
+                    self._running = False
+                    if self._ws:
+                        asyncio.ensure_future(self._ws.close())
+            except Exception as exc:
+                logger.debug("[Douyin] ControlMessage 解析错误: %s", exc)
+            return
+
         handlers = {
             "WebcastChatMessage":   self._on_chat,
             "WebcastGiftMessage":   self._on_gift,
