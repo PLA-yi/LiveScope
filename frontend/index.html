@@ -61,7 +61,8 @@ select{cursor:pointer;width:100%}
 .sess-item{padding:9px 14px 9px 28px;cursor:pointer;border-left:3px solid transparent;transition:background .15s;position:relative}
 .sess-item:hover{background:var(--s2)}
 .sess-item.active{background:rgba(124,106,247,.1);border-left-color:var(--ac)}
-.sess-item.drag-over{border-top:2px solid var(--ac)}
+.sess-item.drag-over-top{border-top:2px solid var(--ac)}
+.sess-item.drag-over-bottom{border-bottom:2px solid var(--ac)}
 .sess-item.dragging{opacity:.4}
 .sess-drag-handle{position:absolute;left:8px;top:50%;transform:translateY(-50%);
   color:var(--mu);opacity:0;cursor:grab;font-size:14px;line-height:1;user-select:none;
@@ -754,21 +755,32 @@ async function loadSessions(){
     });
     item.addEventListener('dragend', ()=>{
       item.classList.remove('dragging');
-      el.querySelectorAll('.drag-over').forEach(x=>x.classList.remove('drag-over'));
+      el.querySelectorAll('.drag-over-top,.drag-over-bottom').forEach(x=>{
+        x.classList.remove('drag-over-top','drag-over-bottom');
+      });
       setTimeout(()=>{ _dragSrcId=null; }, 50);
     });
     item.addEventListener('dragover', e=>{
       e.preventDefault(); e.dataTransfer.dropEffect='move';
       _wasDragging = true;
-      el.querySelectorAll('.drag-over').forEach(x=>x.classList.remove('drag-over'));
-      if(sid !== _dragSrcId) item.classList.add('drag-over');
+      el.querySelectorAll('.drag-over-top,.drag-over-bottom').forEach(x=>{
+        x.classList.remove('drag-over-top','drag-over-bottom');
+      });
+      if(sid !== _dragSrcId){
+        const mid = item.getBoundingClientRect().top + item.offsetHeight / 2;
+        item.classList.add(e.clientY < mid ? 'drag-over-top' : 'drag-over-bottom');
+      }
     });
     item.addEventListener('drop', e=>{
       e.preventDefault();
       if(!_dragSrcId || _dragSrcId===sid) return;
       const ids = [...el.querySelectorAll('.sess-item')].map(x=>x.dataset.sid);
-      const si = ids.indexOf(_dragSrcId), ti = ids.indexOf(sid);
-      ids.splice(si,1); ids.splice(ti,0,_dragSrcId);
+      const si = ids.indexOf(_dragSrcId);
+      ids.splice(si, 1);
+      const ti = ids.indexOf(sid);
+      const mid = item.getBoundingClientRect().top + item.offsetHeight / 2;
+      const insertBefore = e.clientY < mid;
+      ids.splice(insertBefore ? ti : ti + 1, 0, _dragSrcId);
       saveSessOrder(ids);
       loadSessions();
     });
