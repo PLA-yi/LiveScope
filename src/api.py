@@ -310,8 +310,8 @@ async def stop_collect(session_id: str = Query(...)) -> JSONResponse:
     return JSONResponse({"session_id": session_id, "status": "stopped"})
 
 
-@app.delete("/api/sessions/{session_id}")
-async def delete_session(session_id: str) -> JSONResponse:
+@app.delete("/api/sessions")
+async def delete_session(session_id: str = Query(...)) -> JSONResponse:
     if session_id in _active:
         return JSONResponse({"error": "采集中的会话不能删除，请先停止采集"}, status_code=400)
     try:

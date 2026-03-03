@@ -819,7 +819,7 @@ function startRename(nameEl, sid){
 // ── 删除会话 ──────────────────────────────────────────────────────────────────
 async function deleteSession(sessionId){
   if(!confirm('确定删除该会话及其所有消息记录？此操作不可撤销。')) return;
-  const res = await api(`/api/sessions/${encodeURIComponent(sessionId)}`, {method:'DELETE'});
+  const res = await api(`/api/sessions?session_id=${encodeURIComponent(sessionId)}`, {method:'DELETE'});
   if(res.error){ alert(res.error); return; }
   if(curSession?.id === sessionId){
     curSession = null;
