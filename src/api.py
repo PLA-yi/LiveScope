@@ -248,6 +248,57 @@ async def _cleanup(session_id: str, writer: BatchWriter) -> None:
     await end_live_session(session_id)
 
 
+@app.post("/api/collect/resume")
+async def resume_collect(session_id: str = Query(...)) -> JSONResponse:
+    """恢复已结束会话的采集，复用原 session_id，新消息追加到原会话。"""
+    if session_id in _active:
+        return JSONResponse({"error": "该会话已在采集中"}, status_code=400)
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(Session).where(Session.id == session_id))
+        session = result.scalar_one_or_none()
+    if not session:
+        return JSONResponse({"error": "找不到该会话"}, status_code=404)
+
+    platform   = session.platform
+    streamer   = session.streamer_id
+    room_id    = session.room_id or ""
+
+    # 重置会话状态为 live
+    session.status   = SessionStatus.LIVE
+    session.ended_at = None
+    await upsert_live_session(session)
+
+    write_q: asyncio.Queue = asyncio.Queue(maxsize=10000)
+    writer = BatchWriter(queue=write_q, interval=config.BATCH_WRITE_INTERVAL)
+    writer.start()
+
+    if platform == "tiktok":
+        from src.collectors.tiktok import TikTokCollector
+        euler_key = _load_settings().get("eulerstream_api_key", "") or config.EULERSTREAM_API_KEY
+        collector = TikTokCollector(session=session, queue=write_q, unique_id=streamer, euler_key=euler_key)
+    else:
+        from src.collectors.douyin import DouyinCollector
+        settings = _load_settings()
+        douyin_cookie = settings.get("douyin_cookie", "") or config.DOUYIN_COOKIE
+        collector = DouyinCollector(
+            session=session, queue=write_q,
+            room_id=room_id, cookie=douyin_cookie,
+            web_rid=room_id,
+        )
+
+    task = asyncio.create_task(collector.start(), name=f"collect-{session_id}")
+    _active[session_id] = {"task": task, "writer": writer, "collector": collector, "session": session}
+
+    def _on_done(t: asyncio.Task) -> None:
+        _active.pop(session_id, None)
+        asyncio.create_task(_cleanup(session_id, writer))
+
+    task.add_done_callback(_on_done)
+    logger.info("Collection resumed: %s", session_id)
+    return JSONResponse({"session_id": session_id, "status": "resumed"})
+
+
 @app.post("/api/collect/stop")
 async def stop_collect(session_id: str = Query(...)) -> JSONResponse:
     entry = _active.get(session_id)

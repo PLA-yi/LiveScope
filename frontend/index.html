@@ -728,15 +728,15 @@ async function deleteSession(sessionId){
 // ── 重新采集 ──────────────────────────────────────────────────────────────────
 async function restartSession(s){
   const res = await api(
-    `/api/collect/start?platform=${encodeURIComponent(s.platform)}&target=${encodeURIComponent(s.streamer_id)}`,
+    `/api/collect/resume?session_id=${encodeURIComponent(s.id)}`,
     {method:'POST'}
   );
   if(res.error){ alert(res.error); return; }
   await loadSessions();
-  // 自动选中新建的会话
+  // 选中原会话（状态已更新为 live）
   const sessions = await api('/api/sessions');
-  const newest = sessions.find(x => x.id === res.session_id);
-  if(newest) await selectSession(newest);
+  const same = sessions.find(x => x.id === s.id);
+  if(same) await selectSession(same);
 }
 
 // ── 选中会话 ──────────────────────────────────────────────────────────────────
