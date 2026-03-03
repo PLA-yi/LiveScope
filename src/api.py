@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from sqlalchemy import func, select, text
 
 from src.config import config
-from src.database.db import AsyncSessionLocal, BatchWriter, end_live_session, init_db, upsert_live_session
+from src.database.db import AsyncSessionLocal, BatchWriter, end_live_session, engine, init_db, upsert_live_session
 from src.database.models import Message, MessageType, Platform, Session, SessionStatus
 
 logger = logging.getLogger(__name__)
@@ -263,7 +263,6 @@ async def stop_collect(session_id: str = Query(...)) -> JSONResponse:
 async def delete_session(session_id: str) -> JSONResponse:
     if session_id in _active:
         return JSONResponse({"error": "采集中的会话不能删除，请先停止采集"}, status_code=400)
-    from sqlalchemy import text
     try:
         async with engine.begin() as conn:
             r1 = await conn.execute(text("DELETE FROM messages WHERE session_id = :sid"), {"sid": session_id})
